@@ -1,0 +1,12 @@
+# Python virtualenv — embeds absolute home paths and platform binaries.
+# bootstrap.sh recreates it, so never commit it.
+.venv/
+__pycache__/
+*.pyc
+
+# Runtime logs the daemon/hooks write to /tmp are out of tree, but keep any
+# stray local copies out just in case.
+*.log
+
+# macOS cruft
+.DS_Store
