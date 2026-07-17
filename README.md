@@ -103,12 +103,12 @@ qmk flash firmware/work_louder_micro/agent/work_louder_micro_agent.hex   # or QM
 ./bootstrap.sh --per-key
 ```
 
-Tier B v1 still shows the *winning* state on every key — visually like stock, but
-driven over the per-key pipe (1-byte state code per key on VIA custom channel
-`0x30`; your VIA keymap keeps working untouched). It's the foundation for v2,
-which assigns one session per key so two agents show up on different keys. Full
-protocol and roadmap in
-[docs/per-key-led-design.md](docs/per-key-led-design.md); flashing details in
+Tier B gives **each concurrent session its own LED**: the daemon assigns every
+Claude/Codex session a key from a reserved strip and paints it with that
+session's state, so two agents show up on different keys (a 1-byte state code per
+key on VIA custom channel `0x30`; your VIA keymap keeps working untouched). Full
+protocol in [docs/per-key-led-design.md](docs/per-key-led-design.md); flashing
+details in
 [firmware/work_louder_micro/agent/readme.md](firmware/work_louder_micro/agent/readme.md).
 
 ## Optional: keymap & app routing
@@ -225,10 +225,10 @@ qmk flash firmware/work_louder_micro/agent/work_louder_micro_agent.hex   # 또�
 ./bootstrap.sh --per-key
 ```
 
-Tier B v1은 여전히 *승자* 상태를 모든 키에 보여줘 겉보기엔 stock과 같지만,
-per-key 파이프(VIA 커스텀 채널 `0x30`에 키당 1바이트 상태코드; 기존 VIA 키맵은
-그대로 유지)로 구동됩니다. 이는 v2의 토대로, v2는 세션당 키를 배정해 두 에이전트가
-서로 다른 키에 표시됩니다. 프로토콜·로드맵 전문은
+Tier B는 **동시 세션마다 자기 LED**를 가집니다. 데몬이 각 Claude/Codex 세션에
+예약된 스트립에서 키 하나를 배정하고 그 세션의 상태색으로 칠하므로, 두 에이전트가
+서로 다른 키에 표시됩니다(VIA 커스텀 채널 `0x30`에 키당 1바이트 상태코드; 기존 VIA
+키맵은 그대로 유지). 프로토콜 전문은
 [docs/per-key-led-design.md](docs/per-key-led-design.md), 플래싱 상세는
 [firmware/work_louder_micro/agent/readme.md](firmware/work_louder_micro/agent/readme.md).
 

@@ -10,6 +10,7 @@ agentkat-bridge and orca ones — are never touched.
   ./run.sh install_hooks.py --dry-run   # show what would change
 """
 import json
+import shlex
 import shutil
 import sys
 import time
@@ -18,6 +19,10 @@ from pathlib import Path
 SETTINGS = Path.home() / ".claude" / "settings.json"
 TAG = "# micropad-agent"
 PORT = 48801
+
+# The helper reads the hook JSON on stdin, extracts session_id, and POSTs. Kept
+# as a script (not an inline curl) so the per-key daemon can tell sessions apart.
+HELPER = Path(__file__).resolve().parent / "hooks" / "claude_state.sh"
 
 # event -> (state, matcher). Matchers follow the convention already in the file.
 EVENTS = {
@@ -32,12 +37,8 @@ EVENTS = {
 
 
 def command_for(state):
-    payload = json.dumps({"state": state, "source": "claude-code"}, separators=(",", ":"))
-    return (
-        f"curl -s -m 1 -X POST http://127.0.0.1:{PORT}/state "
-        f"-H 'Content-Type: application/json' "
-        f"-d '{payload}' >/dev/null 2>&1 || true  {TAG}"
-    )
+    # Claude pipes the hook JSON to this command's stdin; the helper reads it.
+    return f"{shlex.quote(str(HELPER))} {state} {TAG}"
 
 
 def is_ours(group):

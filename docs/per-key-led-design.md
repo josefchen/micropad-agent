@@ -4,8 +4,9 @@ Drive **each key's LED independently** from agent state — Codex-Micro "Agent
 Keys" style — instead of lighting the whole pad one colour. This is a firmware
 change; the stock VIA lighting protocol can only set one global colour.
 
-Status: **design + v1, firmware compile-verified** (QMK `0.33.8-5-ga738fad372`,
-27432/28672 B, 95%). Not yet flashed to hardware. See the checklist at the end.
+Status: **v2 shipped** — firmware flash-tested on hardware (atmel-dfu), and the
+host daemon assigns one LED slot per concurrent session. See the checklist at the
+end.
 
 ---
 
@@ -131,18 +132,24 @@ back into launchd.
 
 ### v1 vs v2
 
-- **v1 (implemented, no hook changes):** the winning state fills all 12 keys.
-  Visually like today, but proves the per-key pipe end to end.
-- **v2 (Codex-Micro style, needs hook changes):** each concurrent session gets
-  its own key. Requires the hooks to also POST a session id —
-  `session_id` from Claude hook stdin, `thread-id` from the Codex notify payload
-  (materials already exist). Then the daemon assigns `session_id → LED slot`,
-  frees on `SessionEnd`.
+- **v1 (superseded):** the winning state filled all 12 keys — proved the per-key
+  pipe end to end without hook changes. Kept in git history.
+- **v2 (current, in `daemon_perkey.py`):** each concurrent session gets its own
+  key. The hooks POST a session id — `session_id` pulled from Claude hook stdin
+  by `hooks/claude_state.sh`, a thread/conversation id from the Codex notify
+  payload by `hooks/codex_notify.sh`. The daemon keys state by session, assigns
+  each a free slot, and releases it on `SessionEnd` (Claude posts `idle`) or when
+  a `success` decays after `DONE_DECAY_S`.
 
 ```
-SLOTS = [10, 11, 9, 8, 3, 4]   # LED indices reserved as status slots (priority)
-assign: session_id → slot       # first-seen grabs a free slot; SessionEnd releases
+SLOTS = [10, 11, 9, 8, 3, 4]   # LED indices reserved as status slots, in assignment order
+assign: session → slot          # first-seen grabs the next free slot; a full pad evicts the stalest
+render: SLOTS glow dim-white as a status strip; each active session paints its own slot
 ```
+
+No session id in a POST? The daemon falls back to keying by `source`, so you
+still get one slot for Claude and one for Codex — v1's two-agent behaviour,
+degraded gracefully. `GET /state` dumps the live slot assignment for debugging.
 
 ---
 
@@ -160,10 +167,10 @@ slots and cap those translucent; the rest can stay opaque per the keycap guide.
 
 - [x] Set up a QMK build env; `qmk compile -kb work_louder/micro -km agent` succeeds
 - [x] Verify `via_custom_value_command_kb` hook + `id_custom_set_value` against QMK version
-- [ ] Flash via QMK Toolbox (hold top-left encoder to enter bootloader)
+- [x] Flash via QMK Toolbox (hold top-left encoder to enter bootloader)
+- [x] Run `daemon_perkey.py`, confirm all five states light up on hardware
+- [x] v2: add session id to hooks, implement slot assignment + release
+- [x] Ship v2 via `./bootstrap.sh --per-key` (launchd runs `daemon_perkey.py`)
+- [ ] Buy translucent Choc caps for the six SLOTS keys
 - [ ] Re-apply the 4-layer keymap (`layers.py --apply`) if VIA keymap resets
-- [ ] Run `daemon_perkey.py`, confirm v1 (winner state on all 12 keys)
-- [ ] Buy translucent Choc caps for chosen status keys
-- [ ] v2: add session id to hooks, implement slot assignment
-- [ ] Fold per-key path into `daemon.py` + launchd
 ```
