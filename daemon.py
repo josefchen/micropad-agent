@@ -4,8 +4,9 @@
 Mirrors the agentkat-bridge pattern: hooks POST {"state":..,"source":..} to a
 local port; this daemon renders the winning state onto the pad.
 
-  hue     = which agent   (orange = Claude Code, blue = Codex)
-  motion  = what it's doing (breathe = working, blink = wants you, solid = done)
+  colour = agent state    (white idle · green done · yellow needs-you · red error)
+  working states keep the agent's own hue (amber Claude / blue Codex) so you can
+  still see who is running; motion reinforces (breathe / blink / strobe).
 
 Everything is rendered host-side as solid-colour + brightness modulation, so we
 never depend on firmware effect ids. Listens on 127.0.0.1:48801.
@@ -30,9 +31,12 @@ V_BRIGHTNESS, V_EFFECT, V_COLOR = 0x01, 0x02, 0x04
 MAX_BRIGHT = 150          # keyboard.json: rgb_matrix.max_brightness
 EFFECT_SOLID = 1
 
-# QMK hue is 0-255. Red sits at 0, so Claude's orange is pushed up to amber —
-# at hue 12 the two were indistinguishable on the pad.
-HUE_CLAUDE, HUE_CODEX, HUE_ERROR = 28, 170, 0
+# QMK hue is 0-255 (red 0, yellow 45, green 85, blue 170). Colour encodes STATE;
+# only the working states keep the agent's identity hue, Codex-Micro style, so the
+# pad reads as "what's happening" first and "who" only while it's actually running.
+# Claude's orange is pushed up to amber (28) — at hue 12 it washed into red on the pad.
+HUE_CLAUDE, HUE_CODEX = 28, 170              # amber / blue — shown only while working
+HUE_DONE, HUE_INPUT, HUE_ERROR = 85, 45, 0   # green done / yellow needs-you / red error
 
 PORT = 48801
 FRAME_HZ = 20
@@ -121,27 +125,35 @@ def winner():
 
 
 def frame_for(source, state, t):
-    """Map (agent, state) -> (hue, sat, brightness) for time t."""
-    hue = AGENT_HUE.get(source, HUE_CLAUDE)
+    """Map (agent, state) -> (hue, sat, brightness) for time t.
 
+    Colour encodes STATE; only the working states keep the agent's identity hue.
+        idle       dim white
+        thinking   agent colour (amber Claude / blue Codex), breathing
+        coding     same, breathing a little faster
+        waiting    yellow, blink        — "I need you"
+        success    green, solid         — "done"
+        error      red, strobed white
+    """
     if state == "error":
-        # Alternating red/white strobe. Red and amber wash into each other through the
-        # pad's diffusers, so the white half — not the hue — is what makes this read as
-        # an error rather than as Claude working.
+        # Red strobed against white. Red and amber wash into each other through the
+        # pad's diffusers, so the white half — not the hue — is what makes this read
+        # as an error rather than as an agent working.
         if int(t * 6) % 2:
             return HUE_ERROR, 255, MAX_BRIGHT
         return 0, 0, MAX_BRIGHT   # sat 0 = white
     if state == "waiting":
-        # agent colour, 2Hz blink — "I need you"
-        return hue, 255, MAX_BRIGHT if int(t * 4) % 2 else 0
+        # yellow, 2Hz blink — needs your input
+        return HUE_INPUT, 255, MAX_BRIGHT if int(t * 4) % 2 else 0
     if state in ("thinking", "coding"):
         # agent colour, breathing. coding breathes a little faster than thinking.
+        hue = AGENT_HUE.get(source, HUE_CLAUDE)
         period = 1.4 if state == "coding" else 2.2
         phase = (math.sin(2 * math.pi * t / period) + 1) / 2      # 0..1
         return hue, 255, int(MAX_BRIGHT * (0.12 + 0.88 * phase))
     if state == "success":
-        return hue, 255, MAX_BRIGHT
-    return hue, 255, 6   # idle — barely lit
+        return HUE_DONE, 255, MAX_BRIGHT      # green, solid
+    return 0, 0, 14   # idle — dim white standby
 
 
 # ---------------------------------------------------------------- http

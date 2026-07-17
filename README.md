@@ -13,20 +13,17 @@ host-side over raw HID.
 
 ## What you see
 
-The design has two axes — **hue = who**, **motion = what**:
+Colour encodes **state** (Codex-Micro style); only the working states keep the
+agent's identity hue, so the pad reads as *what's happening* first and *who* only
+while it's actually running:
 
-| Agent  | Hue    |
-|--------|--------|
-| Claude Code | amber |
-| Codex CLI   | blue  |
-
-| State | Motion |
-|-------|--------|
-| working (thinking / coding) | breathing (coding breathes a little faster) |
-| wants you (permission / notification) | 2 Hz blink |
-| done | solid, then fades to idle after ~45 s |
-| error | red⇄white strobe (white is what makes it read as an error, not as amber) |
-| idle | barely lit |
+| State | Colour | Motion |
+|-------|--------|--------|
+| idle | dim white | solid |
+| working (thinking / coding) | amber (Claude) · blue (Codex) | breathing (coding a little faster) |
+| needs you (permission / notification) | yellow | 2 Hz blink |
+| done | green | solid, fades to idle after ~45 s |
+| error | red | red⇄white strobe (the white half is what makes it read as an error) |
 
 When both agents are active, the most urgent state wins the pad; a fresh "done"
 briefly announces itself so a finish isn't invisible while the other agent works.
@@ -126,20 +123,16 @@ MIT — see [LICENSE](LICENSE).
 
 ### 무엇이 보이나
 
-두 개의 축 — **색조 = 누구**, **거동 = 무엇**:
+**색 = 상태** (Codex Micro 방식). 작업 중일 때만 에이전트 색을 유지해, 패드가
+*무슨 일인지*를 먼저, *누구인지*는 도는 동안에만 보여줍니다:
 
-| 에이전트 | 색조 |
-|---------|------|
-| Claude Code | 앰버(주황) |
-| Codex CLI   | 파랑 |
-
-| 상태 | 거동 |
-|------|------|
-| 작업 중 (사고 / 코딩) | 숨쉬기 (코딩이 조금 더 빠름) |
-| 승인 대기 (권한 / 알림) | 2 Hz 깜빡임 |
-| 완료 | solid → 약 45초 후 idle로 페이드 |
-| 에러 | 빨강⇄하양 스트로브 (하양이 있어야 앰버 작업중과 구분됨) |
-| 대기 | 아주 희미하게 점등 |
+| 상태 | 색 | 거동 |
+|------|----|------|
+| 대기(idle) | 흐린 화이트 | solid |
+| 작업 중 (thinking / coding) | 앰버(Claude) · 파랑(Codex) | 숨쉬기 (코딩이 조금 빠름) |
+| 승인 대기 (권한 / 알림) | 노랑 | 2 Hz 깜빡임 |
+| 완료 | 초록 | solid → 약 45초 후 페이드 |
+| 에러 | 빨강 | 빨강⇄하양 스트로브 (하양이 에러로 읽히게 함) |
 
 두 에이전트가 동시에 활동하면 가장 급한 상태가 패드를 차지하고, 방금 끝난
 "완료"는 잠깐 자기를 알립니다(다른 에이전트가 작업 중이어도 완료가 묻히지 않게).
