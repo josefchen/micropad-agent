@@ -51,7 +51,7 @@ never depends on firmware effect ids.
 ## Install
 
 ```bash
-git clone <this-repo> micropad-agent
+git clone https://github.com/kimtoma/micropad-agent.git
 cd micropad-agent
 ./bootstrap.sh
 ```
@@ -159,7 +159,7 @@ usage page/usage `0xFF60`/`0x61`, VIA 프로토콜 v12, 16키(4×4) + 노브 2 +
 ### 설치
 
 ```bash
-git clone <이-레포> micropad-agent
+git clone https://github.com/kimtoma/micropad-agent.git
 cd micropad-agent
 ./bootstrap.sh
 ```
