@@ -88,6 +88,29 @@ Codex CLI notify  ─┘        {state, source}            (20 Hz render loop)
 - `probe.py`, `colortest.py`, `errortest.py` — bring-up / diagnostic tools.
 - `via_keymap.py`, `layers.py`, `gen_karabiner.py` — optional keymap tooling (see below).
 
+## Optional: per-key LEDs (Tier B)
+
+By default the daemon paints the **winning state across all 12 keys** on stock
+firmware — that's the no-flashing path above. **Tier B** drives each key
+independently, which needs a small custom QMK build (the `agent` keymap) flashed
+to the pad. A prebuilt, compile-verified hex ships in the repo.
+
+```bash
+# 1. enter the bootloader: hold the top-left encoder (scroll wheel) while plugging in
+# 2. flash the prebuilt hex (atmega32u4 / atmel-dfu — low brick risk)
+qmk flash firmware/work_louder_micro/agent/work_louder_micro_agent.hex   # or QMK Toolbox
+# 3. install the per-key renderer instead of the stock one
+./bootstrap.sh --per-key
+```
+
+Tier B v1 still shows the *winning* state on every key — visually like stock, but
+driven over the per-key pipe (1-byte state code per key on VIA custom channel
+`0x30`; your VIA keymap keeps working untouched). It's the foundation for v2,
+which assigns one session per key so two agents show up on different keys. Full
+protocol and roadmap in
+[docs/per-key-led-design.md](docs/per-key-led-design.md); flashing details in
+[firmware/work_louder_micro/agent/readme.md](firmware/work_louder_micro/agent/readme.md).
+
 ## Optional: keymap & app routing
 
 `via_keymap.py` and `layers.py` can rewrite the pad's keymap over the same VIA
@@ -186,6 +209,28 @@ Codex CLI notify ─┘        {state, source}         (20Hz 렌더 루프)
 - `hooks/codex_notify.sh` — Codex `notify` 타깃, 턴 종료 보고
 - `probe.py`·`colortest.py`·`errortest.py` — 초기 점검/진단 도구
 - `via_keymap.py`·`layers.py`·`gen_karabiner.py` — (선택) 키맵 도구, 아래 참고
+
+### (선택) 키별 LED (Tier B)
+
+기본값은 공장 펌웨어에서 **승자 상태를 12키 전부에 동일하게** 칠하는 방식이라
+플래싱이 필요 없습니다(위 설치 경로). **Tier B**는 각 키를 독립적으로 제어하며,
+그러려면 작은 커스텀 QMK 빌드(`agent` 키맵)를 패드에 플래시해야 합니다. 컴파일
+검증된 프리빌트 hex가 레포에 포함돼 있습니다.
+
+```bash
+# 1. 부트로더 진입: 좌상단 인코더(스크롤휠)를 누른 채로 패드 연결
+# 2. 프리빌트 hex 플래시 (atmega32u4 / atmel-dfu — 브릭 위험 낮음)
+qmk flash firmware/work_louder_micro/agent/work_louder_micro_agent.hex   # 또는 QMK Toolbox
+# 3. stock 대신 per-key 렌더러 설치
+./bootstrap.sh --per-key
+```
+
+Tier B v1은 여전히 *승자* 상태를 모든 키에 보여줘 겉보기엔 stock과 같지만,
+per-key 파이프(VIA 커스텀 채널 `0x30`에 키당 1바이트 상태코드; 기존 VIA 키맵은
+그대로 유지)로 구동됩니다. 이는 v2의 토대로, v2는 세션당 키를 배정해 두 에이전트가
+서로 다른 키에 표시됩니다. 프로토콜·로드맵 전문은
+[docs/per-key-led-design.md](docs/per-key-led-design.md), 플래싱 상세는
+[firmware/work_louder_micro/agent/readme.md](firmware/work_louder_micro/agent/readme.md).
 
 ### (선택) 키맵 & 앱 라우팅
 

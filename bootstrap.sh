@@ -9,7 +9,8 @@
 # All paths are derived from where this script lives ($HOME, arch, repo dir), so
 # it works under any username on Apple Silicon or Intel. Safe to re-run.
 #
-#   ./bootstrap.sh              # install / refresh everything
+#   ./bootstrap.sh              # install / refresh (stock firmware — no flashing)
+#   ./bootstrap.sh --per-key    # Tier B: per-key LEDs (needs the custom `agent` firmware flashed)
 #   ./bootstrap.sh --uninstall  # tear down (daemon + Claude hooks)
 set -euo pipefail
 
@@ -24,8 +25,21 @@ log()  { printf '\033[1;36m▸\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m!\033[0m %s\n' "$*"; }
 die()  { printf '\033[1;31m✗\033[0m %s\n' "$*" >&2; exit 1; }
 
+# --- flags ------------------------------------------------------------------
+# Default renderer is the stock-firmware daemon (no flashing). --per-key opts
+# into the Tier B per-key renderer, which REQUIRES the custom `agent` firmware.
+DAEMON="daemon.py"
+UNINSTALL=""
+for arg in "$@"; do
+  case "$arg" in
+    --per-key)   DAEMON="daemon_perkey.py" ;;
+    --uninstall) UNINSTALL=1 ;;
+    *) die "unknown flag: $arg (use --per-key or --uninstall)" ;;
+  esac
+done
+
 # ---- uninstall -------------------------------------------------------------
-if [ "${1:-}" = "--uninstall" ]; then
+if [ -n "$UNINSTALL" ]; then
   launchctl unload "$PLIST" 2>/dev/null || true   # NB: pkill won't kill it (KeepAlive)
   rm -f "$PLIST" && log "daemon removed"
   [ -x "$HERE/run.sh" ] && "$HERE/run.sh" install_hooks.py --uninstall || true
@@ -51,6 +65,7 @@ fi
 log "python deps ready"
 
 # ---- 3. launchd daemon (paths + DYLD baked in for THIS machine) ------------
+log "renderer: $DAEMON$([ "$DAEMON" = daemon_perkey.py ] && echo '  (Tier B — needs the custom `agent` firmware flashed)')"
 mkdir -p "$HOME/Library/LaunchAgents"
 launchctl unload "$PLIST" 2>/dev/null || true
 cat > "$PLIST" <<EOF
@@ -64,7 +79,7 @@ cat > "$PLIST" <<EOF
     <key>ProgramArguments</key>
     <array>
         <string>$HERE/run.sh</string>
-        <string>daemon.py</string>
+        <string>$DAEMON</string>
     </array>
 
     <key>WorkingDirectory</key>

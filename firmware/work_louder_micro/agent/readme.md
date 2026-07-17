@@ -1,7 +1,8 @@
 # work_louder/micro — `agent` keymap (per-key agent-status LEDs)
 
 **Compile-verified** against QMK `0.33.8-5-ga738fad372` (avr-gcc 8.5.0),
-27432/28672 bytes (95%, 1240 free). **Not yet flash-tested on hardware.** Adds a
+27432/28672 bytes (95%, 1240 free). **Flash-tested on hardware** (atmel-dfu,
+validate OK) — all five states light up under `daemon_perkey.py`. Adds a
 host-driven LED overlay on top of stock VIA. Full design in
 [`docs/per-key-led-design.md`](../../../docs/per-key-led-design.md).
 
