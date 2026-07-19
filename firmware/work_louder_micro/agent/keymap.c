@@ -1,15 +1,14 @@
-/* micropad-agent — per-key agent-status LEDs (Tier B, v1)
+/* micropad-agent — per-key agent-status LEDs (Tier B, v2)
  *
  * Copy into: qmk_firmware/keyboards/work_louder/micro/keymaps/agent/
  *   qmk compile -kb work_louder/micro -km agent
  *
- * Adds an LED overlay driven by the host over a VIA custom command channel.
- * Keys, layers, and encoders are left to the stock/VIA keymap — this only paints
- * the 12 RGB-matrix LEDs from a 12-byte state frame and animates them locally.
- *
- * DRAFT — written from the QMK API, not yet compiled/flashed. Verify the
- * via_custom_value_command_kb hook and id_custom_set_value symbol against the
- * QMK version you build with.
+ * Two host-side features layered on stock VIA (keys/layers/encoders untouched):
+ *   1. LED overlay  — host pushes a 12-byte state frame over a VIA custom
+ *      channel; firmware paints + animates the 12 RGB-matrix LEDs locally.
+ *   2. Focus (v2)   — hold the bottom-left touch and tap a status key; firmware
+ *      reports which slot over raw HID (0xF1) and the host focuses that session.
+ *      Tap the touch (no status key) = HOME (layer 0).
  */
 #include QMK_KEYBOARD_H
 #include "raw_hid.h"
@@ -58,6 +57,34 @@ enum agent_state {
 static uint8_t  st[NLED];      // state code per LED index (0 = idle)
 static uint32_t last_rx;       // timer of last host frame
 
+/* --- focus (v2) ----------------------------------------------------------- */
+#define MSG_FOCUS 0xF1         // device -> host: status key pressed while touch held
+#ifndef TAPPING_TERM
+#    define TAPPING_TERM 200
+#endif
+
+static bool     focus_held  = false;
+static uint16_t focus_timer  = 0;
+static bool     focus_used  = false;
+
+/* matrix position -> RGB-matrix LED index, for the six status keys only */
+static int8_t status_led_index(uint8_t r, uint8_t c) {
+    if (r == 0 && c == 1) return 10;
+    if (r == 0 && c == 2) return 11;
+    if (r == 1 && c == 0) return 9;
+    if (r == 1 && c == 1) return 8;
+    if (r == 1 && c == 2) return 7;
+    if (r == 1 && c == 3) return 6;
+    return -1;
+}
+
+static void send_focus(uint8_t led) {
+    uint8_t buf[32] = {0};
+    buf[0] = MSG_FOCUS;
+    buf[1] = led;
+    raw_hid_send(buf, sizeof(buf));
+}
+
 /* Keep VIA: intercept only our channel, defer everything else to VIA core. */
 bool via_custom_value_command_kb(uint8_t *data, uint8_t length) {
     if (data[1] != CH_AGENT) return false;          // not ours -> VIA handles it
@@ -96,6 +123,39 @@ bool rgb_matrix_indicators_advanced_user(uint8_t led_min, uint8_t led_max) {
         rgb_matrix_set_color(i, rgb.r, rgb.g, rgb.b);
     }
     return false;   // we fully own these LEDs
+}
+
+/* Bottom-left touch [3,0]: hold = focus modifier, tap = HOME. While held, the
+ * six status keys emit a focus event to the host instead of their shortcut. */
+bool process_record_user(uint16_t keycode, keyrecord_t *record) {
+    const uint8_t r = record->event.key.row;
+    const uint8_t c = record->event.key.col;
+
+    if (r == 3 && c == 0) {
+        if (record->event.pressed) {
+            focus_held  = true;
+            focus_used  = false;
+            focus_timer = timer_read();
+        } else {
+            focus_held = false;
+            if (!focus_used && timer_elapsed(focus_timer) < TAPPING_TERM) {
+                layer_move(0);      // quick tap still goes HOME
+            }
+        }
+        return false;               // we own this key
+    }
+
+    if (focus_held) {
+        int8_t led = status_led_index(r, c);
+        if (led >= 0) {
+            if (record->event.pressed) {
+                focus_used = true;
+                send_focus((uint8_t)led);
+            }
+            return false;           // consume; suppress the normal shortcut
+        }
+    }
+    return true;
 }
 
 void keyboard_post_init_user(void) {

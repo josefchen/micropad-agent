@@ -142,14 +142,29 @@ back into launchd.
   a `success` decays after `DONE_DECAY_S`.
 
 ```
-SLOTS = [10, 11, 9, 8, 3, 4]   # LED indices reserved as status slots, in assignment order
-assign: session → slot          # first-seen grabs the next free slot; a full pad evicts the stalest
-render: SLOTS glow dim-white as a status strip; each active session paints its own slot
+CLAUDE_SLOTS = [10, 9, 8]   # left cluster  (top-left + row1 left pair)
+CODEX_SLOTS  = [11, 7, 6]   # right cluster (top-right + row1 right pair)
+assign: session → a free slot in ITS agent's cluster (position encodes who);
+        cluster full → any free slot; pad full → evict the stalest session.
+render: the six slots glow dim-white as a status strip; each active session
+        paints its own slot with its state colour.
 ```
 
-No session id in a POST? The daemon falls back to keying by `source`, so you
-still get one slot for Claude and one for Codex — v1's two-agent behaviour,
-degraded gracefully. `GET /state` dumps the live slot assignment for debugging.
+Position encodes the agent: Claude sessions land on the left three keys, Codex
+on the right three, so you can tell them apart by where they light up as well as
+by hue. No session id in a POST? The daemon falls back to keying by `source`,
+still one slot each. `GET /state` dumps the live slot assignment for debugging.
+
+### Focus (v2, firmware + host)
+
+Hold the **bottom-left touch** `[3,0]` and tap a lit status key: the firmware
+reports the LED index to the host over raw HID (`0xF1`) and the daemon acts —
+single tap = background focus, double tap = foreground, tapping an empty slot =
+spawn a new agent. A quick tap of the touch alone (no status key) = HOME
+(layer 0), so the layer-home gesture is preserved. The actual focus/spawn is
+delegated to overridable `hooks/focus_session.sh` / `hooks/spawn_session.sh`
+(tailor to your terminal/mux); the daemon passes each the session's `pane` hint,
+captured best-effort by `hooks/claude_state.sh` from the environment.
 
 ---
 
@@ -170,7 +185,10 @@ slots and cap those translucent; the rest can stay opaque per the keycap guide.
 - [x] Flash via QMK Toolbox (hold top-left encoder to enter bootloader)
 - [x] Run `daemon_perkey.py`, confirm all five states light up on hardware
 - [x] v2: add session id to hooks, implement slot assignment + release
+- [x] v2: agent-clustered slots (Claude left / Codex right)
+- [x] v2: focus — hold bottom-left touch, tap a slot to focus/foreground/spawn (verified on hardware)
 - [x] Ship v2 via `./bootstrap.sh --per-key` (launchd runs `daemon_perkey.py`)
-- [ ] Buy translucent Choc caps for the six SLOTS keys
+- [ ] Buy translucent Choc caps for the six status keys (top two rows)
+- [ ] Fill in `focus_session.sh` / `spawn_session.sh` for your terminal
 - [ ] Re-apply the 4-layer keymap (`layers.py --apply`) if VIA keymap resets
 ```

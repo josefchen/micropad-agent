@@ -16,11 +16,15 @@ with no thread id), the source name is used as the key — so you still get one
 slot for Claude and one for Codex, exactly like v1's two-agent case.
 """
 import json
+import os
+import subprocess
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import hid
+
+HERE = os.path.dirname(os.path.abspath(__file__))
 
 VID, PID = 0x574C, 0xE6E3
 RAW_USAGE_PAGE, RAW_USAGE = 0xFF60, 0x61
@@ -28,6 +32,10 @@ RAW_USAGE_PAGE, RAW_USAGE = 0xFF60, 0x61
 # VIA custom command envelope (matches keymap.c)
 ID_CUSTOM_SET_VALUE = 0x07
 CH_AGENT, VAL_FRAME = 0x30, 0x01
+
+# device -> host focus event (keymap.c: hold bottom-left touch, tap a status key)
+MSG_FOCUS = 0xF1
+DOUBLE_TAP_S = 0.4       # two taps within this window -> foreground instead of focus
 
 NLED = 12
 PORT = 48801
@@ -38,9 +46,14 @@ STALE_SESSION_S = 300.0  # safety net: drop a session gone silent for this long
 # state codes — must match enum agent_state in keymap.c
 IDLE, THINK_CLAUDE, THINK_CODEX, NEEDS, DONE, ERROR, OFF = 0, 1, 2, 3, 4, 5, 0xFF
 
-# LED indices reserved as per-session status slots, in assignment order.
-# See the LED map in docs/per-key-led-design.md. First-seen session grabs SLOTS[0].
-SLOTS = [10, 11, 9, 8, 3, 4]
+# LED indices reserved as per-session status slots. Position encodes the agent:
+# the LEFT cluster is Claude, the RIGHT cluster is Codex, so you can tell them
+# apart by where they light up as well as by hue. See docs/per-key-led-design.md.
+#   row0:       [10][11]          10,9,8 = Claude (left)   11,7,6 = Codex (right)
+#   row1:   [9][ 8][ 7][6]
+CLAUDE_SLOTS = [10, 9, 8]   # top-left + row1 left pair
+CODEX_SLOTS = [11, 7, 6]    # top-right + row1 right pair
+SLOTS = CLAUDE_SLOTS + CODEX_SLOTS   # full status strip (render baseline)
 
 
 # (source, state) -> code. source only matters while working.
@@ -58,18 +71,25 @@ _sessions = {}   # key -> {"source", "state", "ts"}
 _slots = {}      # key -> LED index (a SLOTS entry)
 
 
-def _free_slot():
+def _pool(source):
+    return CODEX_SLOTS if source == "codex" else CLAUDE_SLOTS
+
+
+def _free_slot(source):
     used = set(_slots.values())
-    for s in SLOTS:
+    for s in _pool(source):          # prefer this agent's own cluster
+        if s not in used:
+            return s
+    for s in SLOTS:                  # own cluster full -> spill into any free slot
         if s not in used:
             return s
     return None
 
 
-def _assign(key):
-    """Give `key` a slot: a free one, else evict the least-recently-active
-    session so a live one is never starved by a stale slot holder."""
-    slot = _free_slot()
+def _assign(key, source):
+    """Give `key` a slot from its agent's cluster, else any free slot, else evict
+    the least-recently-active session so a live one is never starved."""
+    slot = _free_slot(source)
     if slot is not None:
         return slot
     if _slots:
@@ -80,7 +100,7 @@ def _assign(key):
     return None
 
 
-def record(key, source, state):
+def record(key, source, state, pane=""):
     now = time.monotonic()
     with _lock:
         # "idle" is only ever posted by Claude's SessionEnd -> session is gone.
@@ -90,10 +110,12 @@ def record(key, source, state):
             return
         s = _sessions.get(key)
         if s is None:
-            _slots[key] = _assign(key)
-            _sessions[key] = {"source": source, "state": state, "ts": now}
+            _slots[key] = _assign(key, source)
+            _sessions[key] = {"source": source, "state": state, "ts": now, "pane": pane}
         else:
             s["source"], s["state"], s["ts"] = source, state, now
+            if pane:
+                s["pane"] = pane   # refresh the focus hint if the hook sent one
 
 
 def reap():
@@ -105,6 +127,36 @@ def reap():
             if (s["state"] == "success" and age > DONE_DECAY_S) or age > STALE_SESSION_S:
                 _sessions.pop(key, None)
                 _slots.pop(key, None)
+
+
+# --- focus (v2): a status key was tapped while the bottom-left touch was held.
+# The firmware reports the LED index; here we turn it into a background focus,
+# a foreground (double-tap), or a spawn (empty slot), via overridable hooks.
+_focus_last = {}   # led index -> monotonic time of last tap
+
+
+def _run_hook(name, args):
+    path = os.path.join(HERE, "hooks", name)
+    if not os.access(path, os.X_OK):
+        return
+    try:
+        subprocess.Popen([path, *args], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+
+
+def handle_focus(led):
+    now = time.monotonic()
+    double = (now - _focus_last.get(led, 0.0)) < DOUBLE_TAP_S
+    _focus_last[led] = now
+    with _lock:
+        key = next((k for k, s in _slots.items() if s == led), None)
+        sess = _sessions.get(key) if key else None
+        pane = sess.get("pane", "") if sess else ""
+    if sess is None:
+        _run_hook("spawn_session.sh", [str(led)])            # empty slot -> new agent
+    else:
+        _run_hook("focus_session.sh", ["foreground" if double else "focus", pane, key])
 
 
 def frame():
@@ -149,6 +201,18 @@ class Pad:
         except Exception:
             self.dev = None   # unplugged; retry next tick
 
+    def read(self, timeout_ms=120):
+        """Poll for a device->host report (focus events). Also drains the VIA
+        echo the firmware sends after each frame; callers filter by MSG_FOCUS."""
+        if self.dev is None and not self._open():
+            return None
+        try:
+            d = self.dev.read(32, timeout_ms)
+            return bytes(d) if d else None
+        except Exception:
+            self.dev = None
+            return None
+
 
 class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
@@ -160,7 +224,7 @@ class Handler(BaseHTTPRequestHandler):
             source = body.get("source", "claude-code")
             state = body.get("state", "idle")
             key = body.get("session") or source   # no session id -> per-source slot
-            record(key, source, state)
+            record(key, source, state, body.get("pane") or "")
             self.send_response(204)
         except Exception:
             self.send_response(400)
@@ -174,7 +238,7 @@ class Handler(BaseHTTPRequestHandler):
                 data = {
                     "slots": {str(slot): key for key, slot in _slots.items()},
                     "sessions": {
-                        k: {"source": s["source"], "state": s["state"]}
+                        k: {"source": s["source"], "state": s["state"], "pane": s.get("pane", "")}
                         for k, s in _sessions.items()
                     },
                 }
@@ -194,7 +258,7 @@ def main():
     pad = Pad()
     srv = HTTPServer(("127.0.0.1", PORT), Handler)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
-    print(f"micropad-agent per-key renderer (v2, per-session slots) on 127.0.0.1:{PORT}")
+    print(f"micropad-agent per-key renderer (v2 + focus) on 127.0.0.1:{PORT}")
     last_beat = 0.0
     while True:
         reap()
@@ -204,7 +268,9 @@ def main():
             pad._last = None
             last_beat = now
         pad.show(f)
-        time.sleep(0.2)
+        ev = pad.read(120)                  # focus events + the read paces the loop
+        if ev and len(ev) >= 2 and ev[0] == MSG_FOCUS:
+            handle_focus(ev[1])
 
 
 if __name__ == "__main__":

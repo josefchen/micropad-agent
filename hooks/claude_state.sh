@@ -8,8 +8,17 @@
 STATE="$1"
 SID="$(sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
 
+# Best-effort pane hint so tap-to-focus (v2) can find this session's terminal.
+# Whatever the terminal/mux exports into the environment; focus_session.sh reads it.
+PANE=""
+[ -n "${ORCA_PANE_KEY:-}" ]      && PANE="orca:$ORCA_PANE_KEY"
+[ -z "$PANE" ] && [ -n "${TMUX_PANE:-}" ]        && PANE="tmux:$TMUX_PANE"
+[ -z "$PANE" ] && [ -n "${WEZTERM_PANE:-}" ]     && PANE="wezterm:$WEZTERM_PANE"
+[ -z "$PANE" ] && [ -n "${KITTY_WINDOW_ID:-}" ]  && PANE="kitty:$KITTY_WINDOW_ID"
+[ -z "$PANE" ] && [ -n "${TERM_SESSION_ID:-}" ]  && PANE="termid:$TERM_SESSION_ID"
+
 curl -s -m 1 -X POST http://127.0.0.1:48801/state \
   -H 'Content-Type: application/json' \
-  -d "{\"state\":\"$STATE\",\"source\":\"claude-code\",\"session\":\"$SID\"}" \
+  -d "{\"state\":\"$STATE\",\"source\":\"claude-code\",\"session\":\"$SID\",\"pane\":\"$PANE\"}" \
   >/dev/null 2>&1 || true
 exit 0
