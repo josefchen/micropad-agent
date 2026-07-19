@@ -85,6 +85,65 @@ static void send_focus(uint8_t led) {
     raw_hid_send(buf, sizeof(buf));
 }
 
+/* --- layer indicator LEDs (3 discrete PWM LEDs, B5/B6/B7) ------------------
+ * Restores the stock behaviour our v1 keymap dropped: one LED lit per active
+ * layer (L0 = all off). Verbatim from keyboards/work_louder/micro/keymaps/default. */
+typedef union {
+    uint32_t raw;
+    struct { uint8_t led_level : 3; };
+} work_louder_config_t;
+static work_louder_config_t work_louder_config;
+
+layer_state_t layer_state_set_user(layer_state_t state) {
+    layer_state_cmp(state, 1) ? work_louder_micro_led_1_on() : work_louder_micro_led_1_off();
+    layer_state_cmp(state, 2) ? work_louder_micro_led_2_on() : work_louder_micro_led_2_off();
+    layer_state_cmp(state, 3) ? work_louder_micro_led_3_on() : work_louder_micro_led_3_off();
+    return state;
+}
+
+void eeconfig_init_user(void) {
+    work_louder_config.raw = 0;
+    work_louder_config.led_level = 1;
+    eeconfig_update_user(work_louder_config.raw);
+}
+
+void matrix_init_user(void) {
+    work_louder_config.raw = eeconfig_read_user();
+    work_louder_micro_led_all_set((uint8_t)(work_louder_config.led_level * 255 / 4));
+}
+
+/* --- underglow as an aggregate alert (perimeter, D2) -----------------------
+ * The keycaps show per-session detail; the underglow shows the single most
+ * urgent state across all sessions so it reads across a room:
+ *   error > needs-input > done > calm (white). Recomputed from the state frame. */
+enum { UG_CALM = 0, UG_DONE, UG_NEEDS, UG_ERROR };
+static uint8_t ug_last = 0xFF;
+
+static void underglow_set(uint8_t agg) {
+    if (agg == ug_last) return;
+    ug_last = agg;
+    switch (agg) {
+        case UG_ERROR: rgblight_sethsv_noeeprom(0,  255, 255); rgblight_mode_noeeprom(RGBLIGHT_MODE_BREATHING + 3); break; // red, fast
+        case UG_NEEDS: rgblight_sethsv_noeeprom(43, 255, 255); rgblight_mode_noeeprom(RGBLIGHT_MODE_BREATHING + 2); break; // yellow
+        case UG_DONE:  rgblight_sethsv_noeeprom(85, 255, 200); rgblight_mode_noeeprom(RGBLIGHT_MODE_BREATHING + 1); break; // green
+        default:       rgblight_sethsv_noeeprom(0,  0,   200); rgblight_mode_noeeprom(RGBLIGHT_MODE_BREATHING + 1); break; // white
+    }
+}
+
+void housekeeping_task_user(void) {
+    uint8_t agg = UG_CALM;
+    if (timer_elapsed32(last_rx) <= STALE_MS) {
+        bool err = false, needs = false, done = false;
+        for (uint8_t i = 0; i < NLED; i++) {
+            if (st[i] == ST_ERROR) err = true;
+            else if (st[i] == ST_NEEDS) needs = true;
+            else if (st[i] == ST_DONE) done = true;
+        }
+        agg = err ? UG_ERROR : needs ? UG_NEEDS : done ? UG_DONE : UG_CALM;
+    }
+    underglow_set(agg);
+}
+
 /* Keep VIA: intercept only our channel, defer everything else to VIA core. */
 bool via_custom_value_command_kb(uint8_t *data, uint8_t length) {
     if (data[1] != CH_AGENT) return false;          // not ours -> VIA handles it
@@ -159,7 +218,13 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
 }
 
 void keyboard_post_init_user(void) {
-    /* Turn the base effect off so our indicators are the only thing painting. */
+    /* Per-key matrix (12 LEDs, D1): base effect off so our indicators own them. */
     rgb_matrix_mode_noeeprom(RGB_MATRIX_SOLID_COLOR);
     rgb_matrix_sethsv_noeeprom(0, 0, 0);
+
+    /* Underglow / perimeter (8 LEDs, separate D2 chain): ambient white breathing.
+     * Independent of the keycap status LEDs — this is the pad's "alive" glow. */
+    rgblight_enable_noeeprom();
+    rgblight_sethsv_noeeprom(0, 0, 200);              // white (sat 0)
+    rgblight_mode_noeeprom(RGBLIGHT_MODE_BREATHING + 1);
 }
