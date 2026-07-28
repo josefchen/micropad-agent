@@ -17,9 +17,11 @@ slot for Claude and one for Codex, exactly like v1's two-agent case.
 """
 import json
 import os
+import socket
 import subprocess
 import threading
 import time
+import uuid
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import hid
@@ -146,6 +148,50 @@ def _run_hook(name, args):
         pass
 
 
+# cmux fast path: talk to the control socket directly instead of shelling out to
+# the cmux CLI (which cold-starts ~150 ms per call). The token + socket path are
+# refreshed into this file by claude_state.sh, which runs inside cmux.
+CMUX_AUTH = os.path.expanduser("~/.cache/micropad/cmux-auth.env")
+
+
+def _cmux_rpc(method, params, timeout=1.5):
+    """One request over the cmux unix socket. Returns the parsed reply or None."""
+    cap = sock_path = None
+    try:
+        with open(CMUX_AUTH) as f:
+            for line in f:
+                k, _, v = line.strip().partition("=")
+                if k == "CMUX_SOCKET_CAPABILITY":
+                    cap = v
+                elif k == "CMUX_SOCKET_PATH":
+                    sock_path = v
+    except OSError:
+        return None
+    if not cap or not sock_path:
+        return None
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    s.settimeout(timeout)
+    try:
+        s.connect(sock_path)
+        req = "_cmux_capability_v1 " + cap + " " + json.dumps(
+            {"id": str(uuid.uuid4()).upper(), "params": params, "method": method}) + "\n"
+        s.sendall(req.encode())
+        buf = b""
+        while True:
+            chunk = s.recv(65536)
+            if not chunk:
+                return None
+            buf += chunk
+            try:
+                return json.loads(buf)
+            except json.JSONDecodeError:
+                continue
+    except Exception:
+        return None
+    finally:
+        s.close()
+
+
 def handle_focus(led):
     now = time.monotonic()
     double = (now - _focus_last.get(led, 0.0)) < DOUBLE_TAP_S
@@ -156,6 +202,14 @@ def handle_focus(led):
         pane = sess.get("pane", "") if sess else ""
     if sess is None:
         _run_hook("spawn_session.sh", [str(led)])            # empty slot -> new agent
+    elif pane.startswith("cmux:"):
+        # direct socket = ~5 ms vs ~150 ms for the CLI
+        ok = _cmux_rpc("surface.focus", {"surface_id": pane[5:]})
+        if double:
+            subprocess.Popen(["open", "-b", "com.cmuxterm.app"],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if ok is None:   # stale token / socket gone -> fall back to the CLI hook
+            _run_hook("focus_session.sh", ["foreground" if double else "focus", pane, key])
     else:
         _run_hook("focus_session.sh", ["foreground" if double else "focus", pane, key])
 
