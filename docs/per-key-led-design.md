@@ -142,16 +142,19 @@ back into launchd.
   a `success` decays after `DONE_DECAY_S`.
 
 ```
-CLAUDE_SLOTS = [10, 9, 8]   # left cluster  (top-left + row1 left pair)
-CODEX_SLOTS  = [11, 7, 6]   # right cluster (top-right + row1 right pair)
+CLAUDE_SLOTS = [10, 9, 8, 2, 3]   # left half of the translucent top 3 rows
+CODEX_SLOTS  = [11, 7, 6, 4, 5]   # right half
 assign: session → a free slot in ITS agent's cluster (position encodes who);
         cluster full → any free slot; pad full → evict the stalest session.
-render: the six slots glow dim-white as a status strip; each active session
+render: the ten slots glow dim-white as a status strip; each active session
         paints its own slot with its state colour.
 ```
 
-Position encodes the agent: Claude sessions land on the left three keys, Codex
-on the right three, so you can tell them apart by where they light up as well as
+The bottom row [3,1]/[3,2] wear opaque green/red caps and are fixed accept (`y`)
+/ reject (`esc`) on every layer (see `layers.py`) — not status slots.
+
+Position encodes the agent: Claude sessions land on the left keys, Codex
+on the right, so you can tell them apart by where they light up as well as
 by hue. No session id in a POST? The daemon falls back to keying by `source`,
 still one slot each. `GET /state` dumps the live slot assignment for debugging.
 

@@ -74,8 +74,8 @@ L0 = {  # terminal / agents — where Claude Code and Codex CLI actually live
     (2, 2): (K["down"], "↓"),
     (2, 3): (CTL | K["c"], "⌃C 인터럽트"),
     (3, 0): (TO(0), "홈 (여기임)"),
-    (3, 1): (GUI | K["t"], "⌘T 새탭"),
-    (3, 2): (GUI | K["d"], "⌘D 분할"),
+    (3, 1): (K["y"],   "🟢 승인"),      # green cap — fixed accept on every layer
+    (3, 2): (K["esc"], "🔴 거절"),      # red cap   — fixed reject/cancel
     (3, 3): (TO(1), "다음 → Codex App"),
 }
 E0 = {(0, 0): (GUI | K["["], "⌘[ 이전탭"), (0, 1): (GUI | K["]"], "⌘] 다음탭"),
@@ -95,8 +95,8 @@ L1 = {  # Codex app — read off the app's own menus via AXMenuItemCmdChar, not 
     (2, 2): (GUI | K["t"], "⌘T 브라우저탭"),
     (2, 3): (GUI | K["o"], "⌘O 폴더열기"),
     (3, 0): (TO(0), "홈 → 터미널"),
-    (3, 1): (GUI | ALT | K["o"], "⌥⌘O Projectless"),
-    (3, 2): (GUI | K["w"], "⌘W 닫기"),
+    (3, 1): (K["y"],   "🟢 승인"),
+    (3, 2): (K["esc"], "🔴 거절"),
     (3, 3): (TO(2), "다음 → Claude Code"),
 }
 E1 = {(0, 0): (GUI | SFT | K["["], "⇧⌘[ 이전Task"), (0, 1): (GUI | SFT | K["]"], "⇧⌘] 다음Task"),
@@ -116,8 +116,8 @@ L2 = {  # Claude Code — from code.claude.com/docs/en/keybindings.md, v2.1.211+
     (2, 2): (GUI | K["o"], "⌘O 패스트모드"),
     (2, 3): (K["esc"], "esc 인터럽트"),
     (3, 0): (TO(0), "홈 → 터미널"),
-    (3, 1): (CTL | K["g"], "⌃G 외부에디터"),
-    (3, 2): (CTL | K["l"], "⌃L 리드로"),
+    (3, 1): (K["y"],   "🟢 승인"),
+    (3, 2): (K["esc"], "🔴 거절"),
     (3, 3): (TO(3), "다음 → Orca"),
 }
 E2 = {(0, 0): (K["up"], "↑ 히스토리"), (0, 1): (K["down"], "↓ 히스토리"),
@@ -137,8 +137,8 @@ L3 = {  # Orca — from the app's own KEYBINDING_DEFINITIONS (116 actions). Mod 
     (2, 2): (GUI | K["d"], "⌘D 분할"),
     (2, 3): (GUI | K["k"], "⌘K 페인 클리어"),
     (3, 0): (TO(0), "홈 → 터미널"),
-    (3, 1): (GUI | ALT | K["a"], "⌥⌘A 플로팅터미널"),
-    (3, 2): (GUI | K["w"], "⌘W 탭닫기"),
+    (3, 1): (K["y"],   "🟢 승인"),
+    (3, 2): (K["esc"], "🔴 거절"),
     (3, 3): (TO(0), "다음 → 터미널 (한바퀴)"),
 }
 E3 = {(0, 0): (GUI | SFT | K["up"], "⇧⌘↑ 이전워크트리"), (0, 1): (GUI | SFT | K["down"], "⇧⌘↓ 다음워크트리"),

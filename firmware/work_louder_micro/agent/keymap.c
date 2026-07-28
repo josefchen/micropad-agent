@@ -67,7 +67,9 @@ static bool     focus_held  = false;
 static uint16_t focus_timer  = 0;
 static bool     focus_used  = false;
 
-/* matrix position -> RGB-matrix LED index, for the six status keys only */
+/* matrix position -> RGB-matrix LED index, for the ten translucent status keys
+ * (top three rows). Row 3 [3,1]/[3,2] are opaque green/red action keys, not
+ * status slots, so they are excluded. */
 static int8_t status_led_index(uint8_t r, uint8_t c) {
     if (r == 0 && c == 1) return 10;
     if (r == 0 && c == 2) return 11;
@@ -75,6 +77,10 @@ static int8_t status_led_index(uint8_t r, uint8_t c) {
     if (r == 1 && c == 1) return 8;
     if (r == 1 && c == 2) return 7;
     if (r == 1 && c == 3) return 6;
+    if (r == 2 && c == 0) return 2;
+    if (r == 2 && c == 1) return 3;
+    if (r == 2 && c == 2) return 4;
+    if (r == 2 && c == 3) return 5;
     return -1;
 }
 

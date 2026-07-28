@@ -11,7 +11,8 @@ SID="$(sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | he
 # Best-effort pane hint so tap-to-focus (v2) can find this session's terminal.
 # Whatever the terminal/mux exports into the environment; focus_session.sh reads it.
 PANE=""
-[ -n "${ORCA_PANE_KEY:-}" ]      && PANE="orca:$ORCA_PANE_KEY"
+[ -n "${CMUX_SURFACE_ID:-}" ]    && PANE="cmux:$CMUX_SURFACE_ID"
+[ -z "$PANE" ] && [ -n "${ORCA_PANE_KEY:-}" ]    && PANE="orca:$ORCA_PANE_KEY"
 [ -z "$PANE" ] && [ -n "${TMUX_PANE:-}" ]        && PANE="tmux:$TMUX_PANE"
 [ -z "$PANE" ] && [ -n "${WEZTERM_PANE:-}" ]     && PANE="wezterm:$WEZTERM_PANE"
 [ -z "$PANE" ] && [ -n "${KITTY_WINDOW_ID:-}" ]  && PANE="kitty:$KITTY_WINDOW_ID"

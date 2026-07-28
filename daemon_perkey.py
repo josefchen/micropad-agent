@@ -47,12 +47,13 @@ STALE_SESSION_S = 300.0  # safety net: drop a session gone silent for this long
 IDLE, THINK_CLAUDE, THINK_CODEX, NEEDS, DONE, ERROR, OFF = 0, 1, 2, 3, 4, 5, 0xFF
 
 # LED indices reserved as per-session status slots. Position encodes the agent:
-# the LEFT cluster is Claude, the RIGHT cluster is Codex, so you can tell them
-# apart by where they light up as well as by hue. See docs/per-key-led-design.md.
-#   row0:       [10][11]          10,9,8 = Claude (left)   11,7,6 = Codex (right)
-#   row1:   [9][ 8][ 7][6]
-CLAUDE_SLOTS = [10, 9, 8]   # top-left + row1 left pair
-CODEX_SLOTS = [11, 7, 6]    # top-right + row1 right pair
+# the LEFT half (cols 0-1) is Claude, the RIGHT half (cols 2-3) is Codex, across
+# the translucent top 3 rows. See docs/per-key-led-design.md.
+#   row0:        [10][11]         left  (Claude): 10,9,8,2,3
+#   row1:    [9][ 8][ 7][6]       right (Codex) : 11,7,6,4,5
+#   row2:    [2][ 3][ 4][5]       row3 [1]/[0] = opaque green/red action keys
+CLAUDE_SLOTS = [10, 9, 8, 2, 3]   # left half, reading order top->bottom
+CODEX_SLOTS = [11, 7, 6, 4, 5]    # right half
 SLOTS = CLAUDE_SLOTS + CODEX_SLOTS   # full status strip (render baseline)
 
 
