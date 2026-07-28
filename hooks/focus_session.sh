@@ -16,7 +16,11 @@ echo "$(date '+%H:%M:%S') focus mode=$MODE pane=$PANE sid=$SID" >> /tmp/micropad
 CMUX_BIN=/Applications/cmux.app/Contents/Resources/bin/cmux
 
 case "$PANE" in
-  cmux:*)    # cmux: switch to the surface (auths to the user socket by default)
+  cmux:*)    # cmux: switch to the surface. The socket only accepts processes
+    # started inside cmux, so we reuse the capability token the hook captured
+    # (claude_state.sh refreshes ~/.cache/micropad/cmux-auth.env from inside cmux).
+    [ -f "$HOME/.cache/micropad/cmux-auth.env" ] && . "$HOME/.cache/micropad/cmux-auth.env"
+    export CMUX_SOCKET_CAPABILITY CMUX_SOCKET_PATH
     "$CMUX_BIN" rpc surface.focus "{\"surface_id\":\"${PANE#cmux:}\"}" >/dev/null 2>&1
     [ "$MODE" = foreground ] && open -b com.cmuxterm.app 2>/dev/null ;;
   orca:*)    orca terminal switch --terminal "${PANE#orca:}" 2>/dev/null ;;   # handle = term_xxx

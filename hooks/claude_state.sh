@@ -18,6 +18,15 @@ PANE=""
 [ -z "$PANE" ] && [ -n "${KITTY_WINDOW_ID:-}" ]  && PANE="kitty:$KITTY_WINDOW_ID"
 [ -z "$PANE" ] && [ -n "${TERM_SESSION_ID:-}" ]  && PANE="termid:$TERM_SESSION_ID"
 
+# cmux's socket only admits processes started inside cmux, so hand the daemon
+# (which runs under launchd, outside cmux) the capability token to reuse.
+if [ -n "${CMUX_SOCKET_CAPABILITY:-}" ]; then
+  mkdir -p "$HOME/.cache/micropad" 2>/dev/null
+  ( umask 077
+    printf 'CMUX_SOCKET_CAPABILITY=%s\nCMUX_SOCKET_PATH=%s\n' \
+      "$CMUX_SOCKET_CAPABILITY" "${CMUX_SOCKET_PATH:-}" > "$HOME/.cache/micropad/cmux-auth.env" ) 2>/dev/null
+fi
+
 curl -s -m 1 -X POST http://127.0.0.1:48801/state \
   -H 'Content-Type: application/json' \
   -d "{\"state\":\"$STATE\",\"source\":\"claude-code\",\"session\":\"$SID\",\"pane\":\"$PANE\"}" \
