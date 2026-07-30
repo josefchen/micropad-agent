@@ -1,4 +1,4 @@
-<title>Micro Pad — 레이아웃 (L0 CMUX / L1 Codex / L2 Claude)</title>
+<title>Micro Pad — 레이아웃 (4레이어)</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
   :root{--bg:#0d1014;--surface:#151b22;--surface-2:#1b232d;--key:#202a35;--key-hi:#26323f;--border:#2a3542;--border-hi:#3a4a5c;--text:#e6edf3;--muted:#8a97a7;--faint:#5d6a79;--claude:#f0a338;--codex:#3fa2e6;--idle:#c3cedb;--needs:#f2d13c;--done:#54c96a;--error:#e5484d;--ff-sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;--ff-mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;--shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px rgba(0,0,0,.28);}
@@ -11,7 +11,7 @@
   header.top{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:20px;margin-bottom:8px;}
   .eyebrow{font-family:var(--ff-mono);font-size:12px;letter-spacing:.16em;text-transform:uppercase;color:var(--codex);margin:0 0 10px;}
   h1{font-size:clamp(26px,4.4vw,40px);line-height:1.08;margin:0;letter-spacing:-.02em;text-wrap:balance;font-weight:680;}
-  .lede{color:var(--muted);max-width:62ch;margin:14px 0 0;font-size:15.5px;}
+  .lede{color:var(--muted);max-width:64ch;margin:14px 0 0;font-size:15.5px;}
   .theme-btn{font-family:var(--ff-mono);font-size:12px;color:var(--muted);background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:8px 12px;cursor:pointer;white-space:nowrap;}
   .theme-btn:hover{border-color:var(--border-hi);color:var(--text);}
   section{margin-top:clamp(36px,6vw,60px);}
@@ -20,8 +20,8 @@
   .sec-num{font-family:var(--ff-mono);font-size:12px;color:var(--faint);border:1px solid var(--border);border-radius:6px;padding:2px 7px;}
   .sec-head p{margin:0;color:var(--muted);font-size:14px;}
   .controls{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:22px;align-items:center;}
-  .segmented{display:inline-flex;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:4px;gap:3px;}
-  .segmented button{font-family:var(--ff-mono);font-size:12.5px;color:var(--muted);background:transparent;border:0;border-radius:7px;padding:7px 13px;cursor:pointer;transition:.14s;}
+  .segmented{display:inline-flex;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:4px;gap:3px;flex-wrap:wrap;}
+  .segmented button{font-family:var(--ff-mono);font-size:12.5px;color:var(--muted);background:transparent;border:0;border-radius:7px;padding:7px 12px;cursor:pointer;transition:.14s;}
   .segmented button[aria-pressed="true"]{background:var(--key-hi);color:var(--text);box-shadow:inset 0 0 0 1px var(--border-hi);}
   .segmented button:hover:not([aria-pressed="true"]){color:var(--text);}
   .segmented button[aria-pressed="true"][data-layer="0"]{color:var(--done);}
@@ -71,7 +71,7 @@
   .state .nm{font-size:13.5px;}
   .state .nm small{display:block;color:var(--muted);font-size:11.5px;font-family:var(--ff-mono);}
   .state .mo{font-family:var(--ff-mono);font-size:10.5px;color:var(--faint);text-transform:uppercase;text-align:right;}
-  .layers-info{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;}
+  .layers-info{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px;}
   .li{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px;}
   .li b{font-size:14px;}
   .li.l0 b{color:var(--done);}
@@ -83,9 +83,9 @@
 <div class="wrap">
   <header class="top">
     <div>
-      <p class="eyebrow">Work Louder × Figma Micro Pad · 3 layers</p>
+      <p class="eyebrow">Work Louder × Figma Micro Pad · 4 layers</p>
       <h1>Micro Pad 레이아웃</h1>
-      <p class="lede"><b style="color:var(--done)">L0</b>는 CMUX 앱(탭=포커스/더블탭=전면), <b>L1</b>=Codex·<b>L2</b>=Claude Code에선 상단 키가 앱 단축키. 우하단 터치로 순환(L0→L1→L2→L0), Orca는 제거.</p>
+      <p class="lede"><b style="color:var(--done)">L0 CMUX</b>는 Agent Key(탭=포커스/더블탭=전면). 나머지 레이어는 앱별 단축키 — <b>L1</b> Claude Code, <b>L2</b> Codex CLI(둘 다 cmux 안), <b>L3</b> Codex 앱(ChatGPT). 우하단 터치로 순환.</p>
     </div>
     <button class="theme-btn" id="themeBtn" aria-label="테마 전환">◐ 테마</button>
   </header>
@@ -95,8 +95,9 @@
     <div class="controls">
       <div class="segmented" role="group" aria-label="레이어" id="layerSeg">
         <button data-layer="0" aria-pressed="true">L0 · CMUX</button>
-        <button data-layer="1" aria-pressed="false">L1 · Codex</button>
-        <button data-layer="2" aria-pressed="false">L2 · Claude</button>
+        <button data-layer="1" aria-pressed="false">L1 · Claude</button>
+        <button data-layer="2" aria-pressed="false">L2 · Codex CLI</button>
+        <button data-layer="3" aria-pressed="false">L3 · Codex 앱</button>
       </div>
       <span class="layer-name" id="layerName"></span>
     </div>
@@ -117,17 +118,18 @@
   <section id="layers">
     <div class="sec-head"><span class="sec-num">02</span><h2>레이어 & 공통 키</h2></div>
     <div class="layers-info">
-      <div class="li l0"><b>L0 · CMUX 앱</b><span>상단 10키 탭=포커스 / 더블탭=전면. 타이핑 없음.</span><div class="dots">레이어 LED: 꺼짐</div></div>
-      <div class="li"><b>L1 · Codex App</b><span>상단 키 = Codex 앱 단축키(New Task·사이드바·Task이동 등).</span><div class="dots">레이어 LED: ●</div></div>
-      <div class="li"><b>L2 · Claude Code</b><span>상단 키 = Claude 단축키(승인·모드순환·모델선택 등).</span><div class="dots">레이어 LED: ●●</div></div>
-      <div class="li"><b>전 레이어 공통</b><span>🟢승인(y)/🔴거절(esc) · 스크롤휠=🖱마우스휠 · 노브=🔊볼륨 · 좌하단=HOME · 상태등 LED · 언더글로우 집계.</span></div>
+      <div class="li l0"><b>L0 · CMUX</b><span>상단 10키 탭=포커스 / 더블탭=전면. 타이핑 없음.</span><div class="dots">레이어 LED: 꺼짐</div></div>
+      <div class="li"><b>L1 · Claude Code</b><span>cmux 안 Claude CLI 키(승인·모드순환·모델선택·확장사고 등).</span><div class="dots">레이어 LED: ●</div></div>
+      <div class="li"><b>L2 · Codex CLI</b><span>cmux 안 Codex CLI 키(취소·히스토리·에디터·추론↑↓·응답복사 등).</span><div class="dots">레이어 LED: ●●</div></div>
+      <div class="li"><b>L3 · Codex 앱</b><span>ChatGPT 데스크탑 Codex GUI 단축키(New Chat·사이드바·파일트리 등).</span><div class="dots">레이어 LED: ●●●</div></div>
+      <div class="li"><b>전 레이어 공통</b><span>🟢승인(y)/🔴거절(esc) · 스크롤휠=🖱마우스휠 · 노브=🔊볼륨 · 좌하단=HOME(→L0) · 상태등 LED · 언더글로우 집계.</span></div>
     </div>
   </section>
 
   <footer>
     <span>CLAUDE_SLOTS=[10,9,8,2,3] · CODEX_SLOTS=[11,7,6,4,5]</span>
+    <span>순환 L0→L1→L2→L3→L0</span>
     <span>firmware 22114/28672 (77%)</span>
-    <span>순환 L0→L1→L2→L0</span>
   </footer>
 </div>
 
@@ -142,15 +144,15 @@
   var SAMPLE={10:"s-claude",9:"s-needs",8:"s-idle",2:"s-off",3:"s-off",11:"s-codex",7:"s-done",6:"s-idle",4:"s-off",5:"s-off"};
   function agentOf(led){return CLAUDE.indexOf(led)>-1?"claude":CODEX.indexOf(led)>-1?"codex":null;}
 
-  // per-layer labels for the 10 status keys (L1 Codex / L2 Claude). L0 = agent.
+  // status-key labels per layer (L1 Claude / L2 Codex CLI / L3 Codex app). L0 = agent.
   var SC={
-    1:{"0,1":["⌘","N Chat"],"0,2":["⇧⌘","N Win"],"1,0":["⌘","B 사이드바"],"1,1":["⌘","J 하단"],"1,2":["⇧⌘","E 파일트리"],"1,3":["⌃","` 터미널"],"2,0":["⇧⌘","[ 이전채팅"],"2,1":["⇧⌘","] 다음채팅"],"2,2":["⌘",", 설정"],"2,3":["⌘","O 폴더"]},
-    2:{"0,1":["","y 승인"],"0,2":["","n 거절"],"1,0":["⇧","⇥ 모드순환"],"1,1":["⌃","T 할일"],"1,2":["⌃","B 백그라운드"],"1,3":["⌃","R 히스토리"],"2,0":["⌥","P 모델"],"2,1":["⌥","T 확장사고"],"2,2":["⌥","O 패스트"],"2,3":["","esc 중단"]}
+    1:{"0,1":["","y 승인"],"0,2":["","n 거절"],"1,0":["⇧","⇥ 모드순환"],"1,1":["⌃","T 할일"],"1,2":["⌃","B 백그라운드"],"1,3":["⌃","R 히스토리"],"2,0":["⌥","P 모델"],"2,1":["⌥","T 확장사고"],"2,2":["⌥","O 패스트"],"2,3":["","esc 중단"]},
+    2:{"0,1":["⌃","C 취소"],"0,2":["","esc 취소"],"1,0":["⌃","R 히스토리"],"1,1":["⌃","L 클리어"],"1,2":["⌃","G 에디터"],"1,3":["⌃","O 응답복사"],"2,0":["⌥",", 추론↓"],"2,1":["⌥",". 추론↑"],"2,2":["⌃","D 종료"],"2,3":["","—"]},
+    3:{"0,1":["⌘","N New Chat"],"0,2":["⇧⌘","N New Win"],"1,0":["⌘","B 사이드바"],"1,1":["⌘","J 하단"],"1,2":["⇧⌘","E 파일트리"],"1,3":["⌃","` 터미널"],"2,0":["⇧⌘","[ 이전채팅"],"2,1":["⇧⌘","] 다음채팅"],"2,2":["⌘",", 설정"],"2,3":["⌘","O 폴더"]}
   };
-  // knob-press per layer
-  var KNOB={0:{"0,0":["⌘","K 클리어"],"0,3":["","뮤트"]},1:{"0,0":["⌥⌘","B 리뷰패널"],"0,3":["⌘","F Find"]},2:{"0,0":["⌘","K 클리어"],"0,3":["⌃","O 트랜스크립트"]}};
+  var KNOB={0:{"0,0":["⌘","K 클리어"],"0,3":["","뮤트"]},1:{"0,0":["⌘","K 클리어"],"0,3":["⌃","O 트랜스크립트"]},2:{"0,0":["","—"],"0,3":["","—"]},3:{"0,0":["⌥⌘","B 리뷰패널"],"0,3":["⌘","F Find"]}};
   var FIXED={"3,0":["home","HOME","→ L0"],"3,1":["green","🟢 승인","y"],"3,2":["red","🔴 거절","esc"],"3,3":["cycle","레이어","순환"]};
-  var LNAME=["L0 CMUX 앱","L1 Codex App","L2 Claude Code"];
+  var LNAME=["L0 CMUX","L1 Claude Code","L2 Codex CLI","L3 Codex 앱"];
 
   var layer=0, grid=document.getElementById("grid"), layerName=document.getElementById("layerName"), layerSeg=document.getElementById("layerSeg"), lipL=document.getElementById("lipL");
 
@@ -160,21 +162,19 @@
       var cell=r+","+c, led=LED[cell], a=agentOf(led), fx=FIXED[cell];
       var div=document.createElement("div"), kc=document.createElement("div"), tag=document.createElement("div");
       kc.className="kc"; tag.className="tag";
-      if(a){ // status key
-        var cls="key "+a+(layer===0?" agent":"");
-        div.className=cls;
+      if(a){
+        div.className="key "+a+(layer===0?" agent":"");
         if(layer===0){ kc.innerHTML="▶ 포커스"; tag.textContent=(a==="claude"?"CLAUDE":"CODEX")+" · TAP/DBL"; }
-        else{ var m=SC[layer][cell]; kc.innerHTML=(m[0]?'<span class="mod">'+m[0]+'</span> ':"")+m[1]; tag.textContent="LED"+led+" · 타이핑"; }
+        else{ var m=SC[layer][cell]; kc.innerHTML=(m[0]?'<span class="mod">'+m[0]+'</span> ':"")+m[1]; tag.textContent="LED"+led; }
         var dot=document.createElement("span"); dot.className="led "+(SAMPLE[led]||"s-idle"); div.appendChild(kc); div.appendChild(tag); div.appendChild(dot); grid.appendChild(div); continue;
       }
-      if(cell==="0,0"||cell==="0,3"){ // knob
+      if(cell==="0,0"||cell==="0,3"){
         div.className="key "+(cell==="0,0"?"wheel":"knob");
         var p=KNOB[layer][cell];
         kc.innerHTML=cell==="0,0"?"🖱 마우스휠":"🔊 볼륨";
-        tag.textContent="누르면 "+(p[0]?p[0]+" ":"")+p[1];
+        tag.textContent=p[1]==="—"?"누르면 —":"누르면 "+(p[0]?p[0]+" ":"")+p[1];
         div.appendChild(kc); div.appendChild(tag); grid.appendChild(div); continue;
       }
-      // fixed bottom keys
       div.className="key "+fx[0];
       kc.innerHTML=fx[1]; tag.textContent=fx[2];
       div.appendChild(kc); div.appendChild(tag); grid.appendChild(div);

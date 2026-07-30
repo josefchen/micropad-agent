@@ -38,6 +38,7 @@ DK_SET_KEYCODE, DK_SET_ENCODER = 0x05, 0x15
 # --- keycodes -----------------------------------------------------------------
 CTL, SFT, ALT, GUI = 0x0100, 0x0200, 0x0400, 0x0800
 TRNS = 0x0001
+NONE = 0x0000
 
 
 def TO(n):
@@ -60,49 +61,29 @@ K.update({
 # --- layers -------------------------------------------------------------------
 # Each entry: matrix position -> (keycode, label shown in --preview)
 
-L0 = {  # terminal / agents — where Claude Code and Codex CLI actually live
+L0 = {  # CMUX — top 10 keys are Agent Keys (firmware: tap=focus / double=front).
+        # Their values here are ignored on L0; only the non-status keys apply.
     (0, 0): (GUI | K["k"], "⌘K 클리어"),
-    (0, 1): (K["y"], "y 승인"),          # accept — the one you reach for most
-    (0, 2): (K["esc"], "esc 거절"),
+    (0, 1): (K["y"], "(agent)"),
+    (0, 2): (K["esc"], "(agent)"),
     (0, 3): (K["mute"], "뮤트"),
-    (1, 0): (CTL | K["a"], "⌃A 줄앞"),
-    (1, 1): (CTL | K["e"], "⌃E 줄끝"),
-    (1, 2): (CTL | K["w"], "⌃W 단어삭제"),
-    (1, 3): (CTL | K["l"], "⌃L 클리어"),
-    (2, 0): (K["tab"], "⇥ 자동완성"),
-    (2, 1): (K["up"], "↑ 히스토리"),
-    (2, 2): (K["down"], "↓"),
-    (2, 3): (CTL | K["c"], "⌃C 인터럽트"),
+    (1, 0): (CTL | K["a"], "(agent)"),
+    (1, 1): (CTL | K["e"], "(agent)"),
+    (1, 2): (CTL | K["w"], "(agent)"),
+    (1, 3): (CTL | K["l"], "(agent)"),
+    (2, 0): (K["tab"], "(agent)"),
+    (2, 1): (K["up"], "(agent)"),
+    (2, 2): (K["down"], "(agent)"),
+    (2, 3): (CTL | K["c"], "(agent)"),
     (3, 0): (TO(0), "홈 (여기임)"),
     (3, 1): (K["y"],   "🟢 승인"),      # green cap — fixed accept on every layer
     (3, 2): (K["esc"], "🔴 거절"),      # red cap   — fixed reject/cancel
-    (3, 3): (TO(1), "다음 → Codex App"),
+    (3, 3): (TO(1), "다음 → Claude Code"),
 }
 E0 = {(0, 0): (GUI | K["["], "⌘[ 이전탭"), (0, 1): (GUI | K["]"], "⌘] 다음탭"),
       (1, 0): (K["pgup"], "스크롤↑"), (1, 1): (K["pgdn"], "스크롤↓")}
 
-L1 = {  # Codex app (ChatGPT.app v26.721) — re-verified from AXMenuItemCmdChar 2026-07-30
-    (0, 0): (GUI | ALT | K["b"], "⌥⌘B 리뷰패널"),   # was ⌘R 새로고침 (없어짐)
-    (0, 1): (GUI | K["n"], "⌘N New Chat"),
-    (0, 2): (GUI | SFT | K["n"], "⇧⌘N New Window"),
-    (0, 3): (GUI | K["f"], "⌘F Find"),
-    (1, 0): (GUI | K["b"], "⌘B 사이드바"),
-    (1, 1): (GUI | K["j"], "⌘J 하단패널"),
-    (1, 2): (GUI | SFT | K["e"], "⇧⌘E 파일트리"),
-    (1, 3): (CTL | K["`"], "⌃` 터미널"),
-    (2, 0): (GUI | SFT | K["["], "⇧⌘[ 이전채팅"),
-    (2, 1): (GUI | SFT | K["]"], "⇧⌘] 다음채팅"),
-    (2, 2): (GUI | K[","], "⌘, 설정"),              # was ⌘T 브라우저탭 (없어짐)
-    (2, 3): (GUI | K["o"], "⌘O 폴더열기"),
-    (3, 0): (TO(0), "홈 → 터미널"),
-    (3, 1): (K["y"],   "🟢 승인"),
-    (3, 2): (K["esc"], "🔴 거절"),
-    (3, 3): (TO(2), "다음 → Claude Code"),
-}
-E1 = {(0, 0): (GUI | SFT | K["["], "⇧⌘[ 이전채팅"), (0, 1): (GUI | SFT | K["]"], "⇧⌘] 다음채팅"),
-      (1, 0): (K["pgup"], "스크롤↑"), (1, 1): (K["pgdn"], "스크롤↓")}
-
-L2 = {  # Claude Code — from code.claude.com/docs/en/keybindings.md, v2.1.211+
+L1 = {  # Claude Code (CLI in cmux) — from code.claude.com/docs/en/keybindings, v2.1.220
     (0, 0): (GUI | K["k"], "⌘K 화면클리어"),
     (0, 1): (K["y"], "y 승인"),
     (0, 2): (K["n"], "n 거절"),
@@ -115,39 +96,61 @@ L2 = {  # Claude Code — from code.claude.com/docs/en/keybindings.md, v2.1.211+
     (2, 1): (ALT | K["t"], "⌥T 확장사고"),      # chat:thinkingToggle = Meta+T
     (2, 2): (ALT | K["o"], "⌥O 패스트모드"),     # chat:fastMode = Meta+O
     (2, 3): (K["esc"], "esc 인터럽트"),
-    (3, 0): (TO(0), "홈 → 터미널"),
+    (3, 0): (TO(0), "홈 → CMUX"),
     (3, 1): (K["y"],   "🟢 승인"),
     (3, 2): (K["esc"], "🔴 거절"),
-    (3, 3): (TO(0), "다음 → 터미널 (한바퀴)"),
+    (3, 3): (TO(2), "다음 → Codex CLI"),
+}
+E1 = {(0, 0): (K["up"], "↑ 히스토리"), (0, 1): (K["down"], "↓ 히스토리"),
+      (1, 0): (K["pgup"], "스크롤↑"), (1, 1): (K["pgdn"], "스크롤↓")}
+
+L2 = {  # Codex CLI (in cmux) — codex-cli 0.144.6, default keymap
+    (0, 0): (NONE, "—"),                       # knob press (turn = mousewheel)
+    (0, 1): (CTL | K["c"], "⌃C 취소"),
+    (0, 2): (K["esc"], "esc 취소"),
+    (0, 3): (NONE, "—"),                       # knob press (turn = volume)
+    (1, 0): (CTL | K["r"], "⌃R 히스토리"),
+    (1, 1): (CTL | K["l"], "⌃L 클리어"),
+    (1, 2): (CTL | K["g"], "⌃G 에디터"),
+    (1, 3): (CTL | K["o"], "⌃O 응답복사"),
+    (2, 0): (ALT | K[","], "⌥, 추론↓"),        # lower reasoning depth
+    (2, 1): (ALT | K["."], "⌥. 추론↑"),        # raise reasoning depth
+    (2, 2): (CTL | K["d"], "⌃D 종료"),
+    (2, 3): (NONE, "—"),
+    (3, 0): (TO(0), "홈 → CMUX"),
+    (3, 1): (K["y"],   "🟢 승인"),
+    (3, 2): (K["esc"], "🔴 거절"),
+    (3, 3): (TO(3), "다음 → Codex 앱"),
 }
 E2 = {(0, 0): (K["up"], "↑ 히스토리"), (0, 1): (K["down"], "↓ 히스토리"),
       (1, 0): (K["pgup"], "스크롤↑"), (1, 1): (K["pgdn"], "스크롤↓")}
 
-L3 = {  # Orca — from the app's own KEYBINDING_DEFINITIONS (116 actions). Mod = ⌘ on mac.
-    (0, 0): (GUI | K["p"], "⌘P Go to File"),
-    (0, 1): (GUI | ALT | K["t"], "⌥⌘T 새 에이전트탭"),
-    (0, 2): (GUI | K["n"], "⌘N 워크트리 생성"),
-    (0, 3): (GUI | SFT | K["f"], "⇧⌘F 검색"),
-    (1, 0): (GUI | K["j"], "⌘J 워크트리 전환"),
-    (1, 1): (GUI | K["b"], "⌘B 사이드바"),
-    (1, 2): (GUI | K["l"], "⌘L 우측바"),
-    (1, 3): (GUI | SFT | K["e"], "⇧⌘E 탐색기"),
-    (2, 0): (GUI | SFT | K["g"], "⇧⌘G 소스컨트롤"),
-    (2, 1): (GUI | K["t"], "⌘T 새 터미널탭"),
-    (2, 2): (GUI | K["d"], "⌘D 분할"),
-    (2, 3): (GUI | K["k"], "⌘K 페인 클리어"),
-    (3, 0): (TO(0), "홈 → 터미널"),
+L3 = {  # Codex app (ChatGPT.app v26.721) — re-verified from AXMenuItemCmdChar 2026-07-30
+    (0, 0): (GUI | ALT | K["b"], "⌥⌘B 리뷰패널"),
+    (0, 1): (GUI | K["n"], "⌘N New Chat"),
+    (0, 2): (GUI | SFT | K["n"], "⇧⌘N New Window"),
+    (0, 3): (GUI | K["f"], "⌘F Find"),
+    (1, 0): (GUI | K["b"], "⌘B 사이드바"),
+    (1, 1): (GUI | K["j"], "⌘J 하단패널"),
+    (1, 2): (GUI | SFT | K["e"], "⇧⌘E 파일트리"),
+    (1, 3): (CTL | K["`"], "⌃` 터미널"),
+    (2, 0): (GUI | SFT | K["["], "⇧⌘[ 이전채팅"),
+    (2, 1): (GUI | SFT | K["]"], "⇧⌘] 다음채팅"),
+    (2, 2): (GUI | K[","], "⌘, 설정"),
+    (2, 3): (GUI | K["o"], "⌘O 폴더열기"),
+    (3, 0): (TO(0), "홈 → CMUX"),
     (3, 1): (K["y"],   "🟢 승인"),
     (3, 2): (K["esc"], "🔴 거절"),
-    (3, 3): (TO(0), "다음 → 터미널 (한바퀴)"),
+    (3, 3): (TO(0), "다음 → CMUX (한바퀴)"),
 }
-E3 = {(0, 0): (GUI | SFT | K["up"], "⇧⌘↑ 이전워크트리"), (0, 1): (GUI | SFT | K["down"], "⇧⌘↓ 다음워크트리"),
+E3 = {(0, 0): (GUI | SFT | K["["], "⇧⌘[ 이전채팅"), (0, 1): (GUI | SFT | K["]"], "⇧⌘] 다음채팅"),
       (1, 0): (K["pgup"], "스크롤↑"), (1, 1): (K["pgdn"], "스크롤↓")}
 
-LAYERS = [(L0, E0, "L0 CMUX 앱 (탭=포커스/더블탭=전면)"),
-          (L1, E1, "L1 Codex App"),
-          (L2, E2, "L2 Claude Code")]
-# Orca (L3) dropped 2026-07-30 — cycle now wraps L0 → L1 → L2 → L0.
+LAYERS = [(L0, E0, "L0 CMUX (탭=포커스/더블탭=전면)"),
+          (L1, E1, "L1 Claude Code (cmux)"),
+          (L2, E2, "L2 Codex CLI (cmux)"),
+          (L3, E3, "L3 Codex 앱 (ChatGPT)")]
+# 순환: L0 CMUX → L1 Claude → L2 Codex CLI → L3 Codex 앱 → L0
 
 GRID = """       {0:^14}  {1:^14}{2:^14}  {3:^14}
        {4:^14}  {5:^14}{6:^14}  {7:^14}
