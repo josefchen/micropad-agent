@@ -81,25 +81,25 @@ L0 = {  # terminal / agents — where Claude Code and Codex CLI actually live
 E0 = {(0, 0): (GUI | K["["], "⌘[ 이전탭"), (0, 1): (GUI | K["]"], "⌘] 다음탭"),
       (1, 0): (K["pgup"], "스크롤↑"), (1, 1): (K["pgdn"], "스크롤↓")}
 
-L1 = {  # Codex app — read off the app's own menus via AXMenuItemCmdChar, not guessed
-    (0, 0): (GUI | K["r"], "⌘R 새로고침"),
-    (0, 1): (GUI | K["n"], "⌘N New Task"),
+L1 = {  # Codex app (ChatGPT.app v26.721) — re-verified from AXMenuItemCmdChar 2026-07-30
+    (0, 0): (GUI | ALT | K["b"], "⌥⌘B 리뷰패널"),   # was ⌘R 새로고침 (없어짐)
+    (0, 1): (GUI | K["n"], "⌘N New Chat"),
     (0, 2): (GUI | SFT | K["n"], "⇧⌘N New Window"),
     (0, 3): (GUI | K["f"], "⌘F Find"),
     (1, 0): (GUI | K["b"], "⌘B 사이드바"),
     (1, 1): (GUI | K["j"], "⌘J 하단패널"),
     (1, 2): (GUI | SFT | K["e"], "⇧⌘E 파일트리"),
     (1, 3): (CTL | K["`"], "⌃` 터미널"),
-    (2, 0): (GUI | SFT | K["["], "⇧⌘[ 이전Task"),
-    (2, 1): (GUI | SFT | K["]"], "⇧⌘] 다음Task"),
-    (2, 2): (GUI | K["t"], "⌘T 브라우저탭"),
+    (2, 0): (GUI | SFT | K["["], "⇧⌘[ 이전채팅"),
+    (2, 1): (GUI | SFT | K["]"], "⇧⌘] 다음채팅"),
+    (2, 2): (GUI | K[","], "⌘, 설정"),              # was ⌘T 브라우저탭 (없어짐)
     (2, 3): (GUI | K["o"], "⌘O 폴더열기"),
     (3, 0): (TO(0), "홈 → 터미널"),
     (3, 1): (K["y"],   "🟢 승인"),
     (3, 2): (K["esc"], "🔴 거절"),
     (3, 3): (TO(2), "다음 → Claude Code"),
 }
-E1 = {(0, 0): (GUI | SFT | K["["], "⇧⌘[ 이전Task"), (0, 1): (GUI | SFT | K["]"], "⇧⌘] 다음Task"),
+E1 = {(0, 0): (GUI | SFT | K["["], "⇧⌘[ 이전채팅"), (0, 1): (GUI | SFT | K["]"], "⇧⌘] 다음채팅"),
       (1, 0): (K["pgup"], "스크롤↑"), (1, 1): (K["pgdn"], "스크롤↓")}
 
 L2 = {  # Claude Code — from code.claude.com/docs/en/keybindings.md, v2.1.211+
@@ -111,9 +111,9 @@ L2 = {  # Claude Code — from code.claude.com/docs/en/keybindings.md, v2.1.211+
     (1, 1): (CTL | K["t"], "⌃T 할일목록"),
     (1, 2): (CTL | K["b"], "⌃B 백그라운드"),
     (1, 3): (CTL | K["r"], "⌃R 히스토리검색"),
-    (2, 0): (GUI | K["p"], "⌘P 모델선택"),
-    (2, 1): (GUI | K["t"], "⌘T 확장사고"),
-    (2, 2): (GUI | K["o"], "⌘O 패스트모드"),
+    (2, 0): (ALT | K["p"], "⌥P 모델선택"),      # chat:modelPicker = Meta+P
+    (2, 1): (ALT | K["t"], "⌥T 확장사고"),      # chat:thinkingToggle = Meta+T
+    (2, 2): (ALT | K["o"], "⌥O 패스트모드"),     # chat:fastMode = Meta+O
     (2, 3): (K["esc"], "esc 인터럽트"),
     (3, 0): (TO(0), "홈 → 터미널"),
     (3, 1): (K["y"],   "🟢 승인"),
