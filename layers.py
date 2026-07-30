@@ -3,10 +3,10 @@
 
 Layers toggle. The bottom-right key walks forward through them and wraps:
 
-    L0 terminal / agents  ──┐
-    L1 Codex app            │  bottom-right = next
-    L2 Claude Code          │
-    L3 Orca  ───────────────┘
+    L0 CMUX / agents  ──────┐
+    L1 Claude Code          │  bottom-right = next
+    L2 Codex CLI            │
+    L3 Codex app  ──────────┘
 
 Every shortcut here was read off the thing itself — Codex from its AXMenuItem menus,
 Claude Code from the published keybindings docs, Orca from its own
@@ -142,7 +142,13 @@ L3 = {  # Codex app (ChatGPT.app v26.721) — re-verified from AXMenuItemCmdChar
     (2, 2): (GUI | K[","], "⌘, 설정"),
     (2, 3): (GUI | K["o"], "⌘O 폴더열기"),
     (3, 0): (TO(0), "홈 → CMUX"),
-    (3, 1): (M1,       "🎤 음성"),
+    # The app has its own realtime voice chat, so the dictation macro would be the
+    # wrong tool here. Not the composer's 「음성 모드 전환」 (⌃⇧V) either — that only
+    # toggles voice on the current chat. Starting a *new* voice chat is
+    # codex.command.realtimeVoice, which has no built-in shortcut: it is a global
+    # hotkey the user records under 설정 > 음성 스타일 > Voice chat hotkey. This combo
+    # is what the pad sends; register the same one there or the key does nothing.
+    (3, 1): (CTL | ALT | GUI | K["v"], "🎤 새음성채팅"),
     (3, 2): (K["esc"], "🔴 취소"),
     (3, 3): (TO(0), "다음 → CMUX (한바퀴)"),
 }
@@ -180,13 +186,28 @@ def apply():
     def send(p):
         dev.write(b"\x00" + bytes(p) + b"\x00" * (32 - len(p)))
 
-    # VIA macros. Encoding: 0x01 0x01 <kc> = SS_TAP; 0x01 0x04 <lo> <hi> = SS_DELAY
-    # ms = (lo-1)+(hi-1)*255; each macro is null-terminated in the shared buffer.
-    m0 = b"/resume" + bytes([0x01, 0x01, 0x28])              # M0: /resume + Enter
-    m1 = bytes([0x01, 0x01, 0xE0, 0x01, 0x04, 81, 1, 0x01, 0x01, 0xE0])  # M1: tap LCTL, 80ms, tap LCTL
-    buf = m0 + b"\x00" + m1 + b"\x00"                        # macOS "Control twice" = dictation
-    send([DK_MACRO_SET, 0x00, 0x00, len(buf)] + list(buf))
-    print("✅ 매크로0=/resume⏎  매크로1=받아쓰기토글(⌃⌃)")
+    # VIA macros. Encoding: 0x01 0x01 <kc>=SS_TAP; 0x01 0x02/0x03 <kc>=down/up;
+    # each macro null-terminated.
+    #
+    # Delays are NOT the two-byte form VIA's own docs describe. This firmware runs
+    # them through send_string_with_delay_impl, whose SS_DELAY_CODE branch parses
+    # ASCII decimal until a non-digit and eats that terminator — i.e. QMK's
+    # SS_DELAY(n) == "\1\4" #n "|". Feeding it binary bytes silently desyncs the
+    # stream: 60 arrives as 0x3d '=', isdigit fails, ms stays 0, and the rest of
+    # the macro is parsed off by one byte.
+    def dly(ms):
+        return b"\x01\x04" + str(ms).encode() + b"|"
+    def press(kc, hold):                       # down, hold, up — human-like key press
+        return bytes([0x01, 0x02, kc]) + dly(hold) + bytes([0x01, 0x03, kc])
+    m0 = b"/resume" + bytes([0x01, 0x01, 0x28])            # M0: /resume + Enter
+    m1 = press(0xE0, 20) + dly(60) + press(0xE0, 20)       # M1: Left Control twice = dictation
+    buf = m0 + b"\x00" + m1 + b"\x00"
+    off = 0                                                # chunk (>28B needs multiple sends)
+    while off < len(buf):
+        ch = buf[off:off + 28]
+        send([DK_MACRO_SET, (off >> 8) & 0xFF, off & 0xFF, len(ch)] + list(ch))
+        off += len(ch)
+    print("✅ 매크로0=/resume⏎  매크로1=받아쓰기(⌃ 두번, hold+간격 튜닝)")
 
     for i, (keys, encs, name) in enumerate(LAYERS):
         for (r, c), (kc, _) in keys.items():
