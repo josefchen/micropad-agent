@@ -6,4 +6,4 @@ VIA_ENABLE = yes
 
 # atmega32u4 flash is tight under the DFU bootloader. The agent keymap doesn't
 # use mouse keys, so drop them to make room (frees ~1 KB).
-MOUSEKEY_ENABLE = no
+MOUSEKEY_ENABLE = yes

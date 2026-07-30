@@ -57,15 +57,10 @@ enum agent_state {
 static uint8_t  st[NLED];      // state code per LED index (0 = idle)
 static uint32_t last_rx;       // timer of last host frame
 
-/* --- focus (v2) ----------------------------------------------------------- */
-#define MSG_FOCUS 0xF1         // device -> host: status key pressed while touch held
-#ifndef TAPPING_TERM
-#    define TAPPING_TERM 200
-#endif
-
-static bool     focus_held  = false;
-static uint16_t focus_timer  = 0;
-static bool     focus_used  = false;
+/* --- focus (v2): the ten translucent status keys are dedicated Agent Keys.
+ * A tap emits a focus event to the host over raw HID; the host decides
+ * single-tap = focus vs double-tap = foreground. They no longer type. */
+#define MSG_FOCUS 0xF1         // device -> host: a status key was tapped
 
 /* matrix position -> RGB-matrix LED index, for the ten translucent status keys
  * (top three rows). Row 3 [3,1]/[3,2] are opaque green/red action keys, not
@@ -190,35 +185,30 @@ bool rgb_matrix_indicators_advanced_user(uint8_t led_min, uint8_t led_max) {
     return false;   // we fully own these LEDs
 }
 
-/* Bottom-left touch [3,0]: hold = focus modifier, tap = HOME. While held, the
- * six status keys emit a focus event to the host instead of their shortcut. */
+/* On layer 0 the ten status keys are Agent Keys: a tap emits a focus event and
+ * types nothing. On other layers (L1 = Codex, L2 = Claude Code) they fall
+ * through to their per-app VIA shortcut. LEDs show status on every layer. */
 bool process_record_user(uint16_t keycode, keyrecord_t *record) {
-    const uint8_t r = record->event.key.row;
-    const uint8_t c = record->event.key.col;
-
-    if (r == 3 && c == 0) {
+    int8_t led = status_led_index(record->event.key.row, record->event.key.col);
+    if (led >= 0 && get_highest_layer(layer_state) == 0) {
         if (record->event.pressed) {
-            focus_held  = true;
-            focus_used  = false;
-            focus_timer = timer_read();
-        } else {
-            focus_held = false;
-            if (!focus_used && timer_elapsed(focus_timer) < TAPPING_TERM) {
-                layer_move(0);      // quick tap still goes HOME
-            }
+            send_focus((uint8_t)led);
         }
-        return false;               // we own this key
+        return false;
     }
+    return true;
+}
 
-    if (focus_held) {
-        int8_t led = status_led_index(r, c);
-        if (led >= 0) {
-            if (record->event.pressed) {
-                focus_used = true;
-                send_focus((uint8_t)led);
-            }
-            return false;           // consume; suppress the normal shortcut
-        }
+/* Encoders: top-left scroll wheel (index 0) = mouse wheel up/down (like a real
+ * mouse); the right knob (index 1) = volume. Overrides the stock kb defaults. */
+bool encoder_update_user(uint8_t index, bool clockwise) {
+    if (index == 0) {
+        tap_code(clockwise ? MS_WHLU : MS_WHLD);
+        return false;
+    }
+    if (index == 1) {
+        tap_code(clockwise ? KC_VOLU : KC_VOLD);
+        return false;
     }
     return true;
 }

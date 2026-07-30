@@ -118,7 +118,7 @@ L2 = {  # Claude Code — from code.claude.com/docs/en/keybindings.md, v2.1.211+
     (3, 0): (TO(0), "홈 → 터미널"),
     (3, 1): (K["y"],   "🟢 승인"),
     (3, 2): (K["esc"], "🔴 거절"),
-    (3, 3): (TO(3), "다음 → Orca"),
+    (3, 3): (TO(0), "다음 → 터미널 (한바퀴)"),
 }
 E2 = {(0, 0): (K["up"], "↑ 히스토리"), (0, 1): (K["down"], "↓ 히스토리"),
       (1, 0): (K["pgup"], "스크롤↑"), (1, 1): (K["pgdn"], "스크롤↓")}
@@ -144,10 +144,10 @@ L3 = {  # Orca — from the app's own KEYBINDING_DEFINITIONS (116 actions). Mod 
 E3 = {(0, 0): (GUI | SFT | K["up"], "⇧⌘↑ 이전워크트리"), (0, 1): (GUI | SFT | K["down"], "⇧⌘↓ 다음워크트리"),
       (1, 0): (K["pgup"], "스크롤↑"), (1, 1): (K["pgdn"], "스크롤↓")}
 
-LAYERS = [(L0, E0, "터미널 / 에이전트  (기본)"),
-          (L1, E1, "Codex App          (우하단 1번)"),
-          (L2, E2, "Claude Code        (우하단 2번)"),
-          (L3, E3, "Orca               (우하단 3번)")]
+LAYERS = [(L0, E0, "L0 CMUX 앱 (탭=포커스/더블탭=전면)"),
+          (L1, E1, "L1 Codex App"),
+          (L2, E2, "L2 Claude Code")]
+# Orca (L3) dropped 2026-07-30 — cycle now wraps L0 → L1 → L2 → L0.
 
 GRID = """       {0:^14}  {1:^14}{2:^14}  {3:^14}
        {4:^14}  {5:^14}{6:^14}  {7:^14}
