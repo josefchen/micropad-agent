@@ -34,11 +34,13 @@ import hid
 VID, PID = 0x574C, 0xE6E3
 RAW_USAGE_PAGE, RAW_USAGE = 0xFF60, 0x61
 DK_SET_KEYCODE, DK_SET_ENCODER = 0x05, 0x15
+DK_MACRO_SET = 0x0F   # id_dynamic_keymap_macro_set_buffer
 
 # --- keycodes -----------------------------------------------------------------
 CTL, SFT, ALT, GUI = 0x0100, 0x0200, 0x0400, 0x0800
 TRNS = 0x0001
 NONE = 0x0000
+M0 = 0x7700   # QK_MACRO_0 — plays VIA macro 0 (set in apply())
 
 
 def TO(n):
@@ -116,7 +118,7 @@ L2 = {  # Codex CLI (in cmux) — codex-cli 0.144.6, default keymap
     (2, 0): (ALT | K[","], "⌥, 추론↓"),        # lower reasoning depth
     (2, 1): (ALT | K["."], "⌥. 추론↑"),        # raise reasoning depth
     (2, 2): (CTL | K["d"], "⌃D 종료"),
-    (2, 3): (NONE, "—"),
+    (2, 3): (M0, "/resume⏎ (매크로)"),
     (3, 0): (TO(0), "홈 → CMUX"),
     (3, 1): (K["y"],   "🟢 승인"),
     (3, 2): (K["esc"], "🔴 거절"),
@@ -176,6 +178,12 @@ def apply():
 
     def send(p):
         dev.write(b"\x00" + bytes(p) + b"\x00" * (32 - len(p)))
+
+    # VIA macro 0 = type "/resume" then tap Enter (used by M0 on the Codex CLI layer).
+    # 0x01 0x01 <kc> = SS_TAP; 0x28 = KC_ENTER; trailing 0x00 terminates macro 0.
+    macro0 = b"/resume" + bytes([0x01, 0x01, 0x28, 0x00])
+    send([DK_MACRO_SET, 0x00, 0x00, len(macro0)] + list(macro0))
+    print("✅ 매크로0 = /resume⏎")
 
     for i, (keys, encs, name) in enumerate(LAYERS):
         for (r, c), (kc, _) in keys.items():
