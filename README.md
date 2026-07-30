@@ -114,10 +114,16 @@ details in
 ## Optional: keymap & app routing
 
 `via_keymap.py` and `layers.py` can rewrite the pad's keymap over the same VIA
-protocol (with `--backup` / `--restore` for safety). `gen_karabiner.py` emits
-Karabiner-Elements rules for per-app shortcut routing. **These encode one
-person's app stack and shortcuts** — treat them as a worked example and edit the
-tables to fit your own setup. They are not required for the LED feature.
+protocol (with `--backup` / `--restore` for safety). `layers.py` also writes VIA
+macros — a `/resume` string and a double-tap-Control trigger for macOS dictation.
+`gen_karabiner.py` emits Karabiner-Elements rules for per-app shortcut routing.
+**These encode one person's app stack and shortcuts** — treat them as a worked
+example and edit the tables to fit your own setup. They are not required for the
+LED feature.
+
+Keys that fire an app's own shortcut only work if that app actually has one. A
+global hotkey you record inside the app (ChatGPT's voice chat hotkey, say) has to
+match the combo the pad sends, or the key silently does nothing.
 
 ## Gotchas
 
@@ -125,6 +131,8 @@ tables to fit your own setup. They are not required for the LED feature.
 - **`pkill` won't stop the daemon** — launchd `KeepAlive` restarts it. Use `launchctl unload ~/Library/LaunchAgents/dev.micropad.agent.plist`.
 - **Codex lights up only from the CLI.** The ChatGPT desktop app is Electron and doesn't read `~/.codex/config.toml`, so it can't fire `notify`.
 - If Codex Computer Use is installed, it rewrites `config.toml` on startup to put itself first and chains this hook behind its `--previous-notify` flag. That's expected — `codex_notify.sh` only reports and exits, so nothing double-fires.
+- **VIA macro delays are ASCII, not the two bytes VIA documents.** The firmware replays macros through `send_string_with_delay_impl`, whose `SS_DELAY` branch parses decimal digits up to a non-digit and consumes that terminator — QMK's `SS_DELAY(n)` is `"\1\4" #n "|"`. Writing the `(lo-1)+(hi-1)*255` byte pair doesn't merely drop the delay: it desyncs the stream and everything after it replays as garbage, so the macro looks completely dead rather than mistimed.
+- **Read the keymap back after writing it.** Individual writes land instantly, but a full `--apply` sweep has been observed to lose its tail — the bottom row stayed at stale values on every layer while everything above it was correct. `0x04` (get keycode) and `0x0E` (get macro buffer) are read-only and settle it in seconds. Unload the daemon first; it holds the device exclusively, for reads too.
 
 ## License
 
@@ -235,10 +243,15 @@ Tier B는 **동시 세션마다 자기 LED**를 가집니다. 데몬이 각 Clau
 ### (선택) 키맵 & 앱 라우팅
 
 `via_keymap.py`·`layers.py`는 같은 VIA 프로토콜로 패드 키맵을 다시 쓸 수 있고
-(`--backup` / `--restore`로 안전하게), `gen_karabiner.py`는 앱별 단축키 라우팅용
-Karabiner-Elements 규칙을 생성합니다. **이 파일들은 특정 개인의 앱 스택·단축키를
-담고 있으니** 예시로 보고 자기 환경에 맞게 표를 고쳐 쓰세요. LED 기능에는 필요
-없습니다.
+(`--backup` / `--restore`로 안전하게), `layers.py`는 VIA 매크로도 씁니다 —
+`/resume` 문자열과 macOS 받아쓰기용 Control 두 번 누르기. `gen_karabiner.py`는
+앱별 단축키 라우팅용 Karabiner-Elements 규칙을 생성합니다. **이 파일들은 특정
+개인의 앱 스택·단축키를 담고 있으니** 예시로 보고 자기 환경에 맞게 표를 고쳐
+쓰세요. LED 기능에는 필요 없습니다.
+
+앱 자체 단축키를 부르는 키는 그 앱에 실제로 단축키가 있어야 동작합니다. 앱 안에서
+녹화하는 전역 핫키(예: ChatGPT의 음성 채팅 핫키)라면 패드가 보내는 조합과 일치해야
+하고, 아니면 키가 조용히 아무것도 안 합니다.
 
 ### 함정
 
@@ -246,6 +259,8 @@ Karabiner-Elements 규칙을 생성합니다. **이 파일들은 특정 개인�
 - **`pkill`로는 데몬이 안 죽습니다** — launchd `KeepAlive`가 되살립니다. `launchctl unload ~/Library/LaunchAgents/dev.micropad.agent.plist`를 쓰세요.
 - **Codex는 CLI일 때만 점등됩니다.** ChatGPT 데스크탑 앱은 Electron이라 `~/.codex/config.toml`을 안 읽어 `notify`를 못 쏩니다.
 - Codex Computer Use가 설치돼 있으면 시작 시 `config.toml`을 자기 우선으로 덮어쓰고 이 훅을 `--previous-notify`로 뒤에 물립니다. 정상 동작이며, `codex_notify.sh`는 보고만 하고 종료하므로 중복 발화하지 않습니다.
+- **VIA 매크로 딜레이는 VIA 문서의 2바이트가 아니라 ASCII입니다.** 펌웨어는 매크로를 `send_string_with_delay_impl`로 재생하고, 그 `SS_DELAY` 분기는 숫자가 아닌 문자를 만날 때까지 십진수를 파싱한 뒤 그 종결자를 소비합니다 — QMK의 `SS_DELAY(n)`은 `"\1\4" #n "|"`입니다. `(lo-1)+(hi-1)*255` 바이트 쌍을 쓰면 딜레이만 무시되는 게 아니라 바이트 스트림이 어긋나 이후 전체가 쓰레기로 재생되므로, 타이밍이 안 맞는 게 아니라 매크로가 아예 죽은 것처럼 보입니다.
+- **키맵을 쓴 뒤에는 되읽어 확인하세요.** 개별 쓰기는 즉시 반영되지만, `--apply` 전체 스윕이 뒷부분을 잃는 경우가 관측됐습니다 — 위쪽은 다 맞는데 하단 행만 전 레이어에서 옛 값으로 남아 있었습니다. `0x04`(키코드 조회)·`0x0E`(매크로 버퍼 조회)는 읽기 전용이라 몇 초면 판별됩니다. 읽기도 데몬이 장치를 독점하므로 먼저 unload 하세요.
 
 ### 라이선스
 
