@@ -40,7 +40,8 @@ DK_MACRO_SET = 0x0F   # id_dynamic_keymap_macro_set_buffer
 CTL, SFT, ALT, GUI = 0x0100, 0x0200, 0x0400, 0x0800
 TRNS = 0x0001
 NONE = 0x0000
-M0 = 0x7700   # QK_MACRO_0 — plays VIA macro 0 (set in apply())
+M0 = 0x7700   # QK_MACRO_0 — /resume (set in apply())
+M1 = 0x7701   # QK_MACRO_1 — double-tap Left Control = macOS dictation toggle
 
 
 def TO(n):
@@ -78,8 +79,8 @@ L0 = {  # CMUX — top 10 keys are Agent Keys (firmware: tap=focus / double=fron
     (2, 2): (K["down"], "(agent)"),
     (2, 3): (CTL | K["c"], "(agent)"),
     (3, 0): (TO(0), "홈 (여기임)"),
-    (3, 1): (K["y"],   "🟢 승인"),      # green cap — fixed accept on every layer
-    (3, 2): (K["esc"], "🔴 거절"),      # red cap   — fixed reject/cancel
+    (3, 1): (M1,       "🎤 음성"),      # green cap — fixed accept on every layer
+    (3, 2): (K["esc"], "🔴 취소"),      # red cap   — fixed reject/cancel
     (3, 3): (TO(1), "다음 → Claude Code"),
 }
 E0 = {(0, 0): (GUI | K["["], "⌘[ 이전탭"), (0, 1): (GUI | K["]"], "⌘] 다음탭"),
@@ -99,8 +100,8 @@ L1 = {  # Claude Code (CLI in cmux) — from code.claude.com/docs/en/keybindings
     (2, 2): (ALT | K["o"], "⌥O 패스트모드"),     # chat:fastMode = Meta+O
     (2, 3): (K["esc"], "esc 인터럽트"),
     (3, 0): (TO(0), "홈 → CMUX"),
-    (3, 1): (K["y"],   "🟢 승인"),
-    (3, 2): (K["esc"], "🔴 거절"),
+    (3, 1): (M1,       "🎤 음성"),
+    (3, 2): (K["esc"], "🔴 취소"),
     (3, 3): (TO(2), "다음 → Codex CLI"),
 }
 E1 = {(0, 0): (K["up"], "↑ 히스토리"), (0, 1): (K["down"], "↓ 히스토리"),
@@ -120,8 +121,8 @@ L2 = {  # Codex CLI (in cmux) — codex-cli 0.144.6, default keymap
     (2, 2): (CTL | K["d"], "⌃D 종료"),
     (2, 3): (M0, "/resume⏎ (매크로)"),
     (3, 0): (TO(0), "홈 → CMUX"),
-    (3, 1): (K["y"],   "🟢 승인"),
-    (3, 2): (K["esc"], "🔴 거절"),
+    (3, 1): (M1,       "🎤 음성"),
+    (3, 2): (K["esc"], "🔴 취소"),
     (3, 3): (TO(3), "다음 → Codex 앱"),
 }
 E2 = {(0, 0): (K["up"], "↑ 히스토리"), (0, 1): (K["down"], "↓ 히스토리"),
@@ -141,8 +142,8 @@ L3 = {  # Codex app (ChatGPT.app v26.721) — re-verified from AXMenuItemCmdChar
     (2, 2): (GUI | K[","], "⌘, 설정"),
     (2, 3): (GUI | K["o"], "⌘O 폴더열기"),
     (3, 0): (TO(0), "홈 → CMUX"),
-    (3, 1): (K["y"],   "🟢 승인"),
-    (3, 2): (K["esc"], "🔴 거절"),
+    (3, 1): (M1,       "🎤 음성"),
+    (3, 2): (K["esc"], "🔴 취소"),
     (3, 3): (TO(0), "다음 → CMUX (한바퀴)"),
 }
 E3 = {(0, 0): (GUI | SFT | K["["], "⇧⌘[ 이전채팅"), (0, 1): (GUI | SFT | K["]"], "⇧⌘] 다음채팅"),
@@ -179,11 +180,13 @@ def apply():
     def send(p):
         dev.write(b"\x00" + bytes(p) + b"\x00" * (32 - len(p)))
 
-    # VIA macro 0 = type "/resume" then tap Enter (used by M0 on the Codex CLI layer).
-    # 0x01 0x01 <kc> = SS_TAP; 0x28 = KC_ENTER; trailing 0x00 terminates macro 0.
-    macro0 = b"/resume" + bytes([0x01, 0x01, 0x28, 0x00])
-    send([DK_MACRO_SET, 0x00, 0x00, len(macro0)] + list(macro0))
-    print("✅ 매크로0 = /resume⏎")
+    # VIA macros. Encoding: 0x01 0x01 <kc> = SS_TAP; 0x01 0x04 <lo> <hi> = SS_DELAY
+    # ms = (lo-1)+(hi-1)*255; each macro is null-terminated in the shared buffer.
+    m0 = b"/resume" + bytes([0x01, 0x01, 0x28])              # M0: /resume + Enter
+    m1 = bytes([0x01, 0x01, 0xE0, 0x01, 0x04, 81, 1, 0x01, 0x01, 0xE0])  # M1: tap LCTL, 80ms, tap LCTL
+    buf = m0 + b"\x00" + m1 + b"\x00"                        # macOS "Control twice" = dictation
+    send([DK_MACRO_SET, 0x00, 0x00, len(buf)] + list(buf))
+    print("✅ 매크로0=/resume⏎  매크로1=받아쓰기토글(⌃⌃)")
 
     for i, (keys, encs, name) in enumerate(LAYERS):
         for (r, c), (kc, _) in keys.items():
