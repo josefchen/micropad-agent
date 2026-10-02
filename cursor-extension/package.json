@@ -1,0 +1,15 @@
+{
+  "name": "session-focus",
+  "publisher": "micropad",
+  "displayName": "Micro Pad session focus",
+  "description": "Opens the Cursor chat assigned to a Micro Pad key.",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "activationEvents": [
+    "onStartupFinished",
+    "onUri"
+  ],
+  "main": "./extension.js"
+}

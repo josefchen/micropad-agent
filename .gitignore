@@ -10,3 +10,6 @@ __pycache__/
 
 # macOS cruft
 .DS_Store
+
+# Built extension package; rebuild from cursor-extension/
+*.vsix

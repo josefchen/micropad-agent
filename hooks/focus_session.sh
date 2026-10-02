@@ -1,32 +1,66 @@
 #!/bin/sh
-# micropad-agent — focus the terminal/pane running an agent session.
+# Open the agent session assigned to a Micro Pad key.
 #
-# Called by daemon_perkey.py when you HOLD the bottom-left touch and TAP a lit
-# status key. Single tap -> mode "focus"; double tap -> mode "foreground".
-#
-#   $1  mode      focus | foreground
-#   $2  pane      the hint claude_state.sh captured (e.g. "cmux:<uuid>")
-#   $3  session   the session id
-#
-# The pane hint format is "<kind>:<id>". Runs from the daemon (bare env), so use
-# absolute tool paths. Add a case for your terminal/mux if it isn't here.
-MODE="$1"; PANE="$2"; SID="$3"
-echo "$(date '+%H:%M:%S') focus mode=$MODE pane=$PANE sid=$SID" >> /tmp/micropad-focus.log
+#   $1 mode        focus | foreground
+#   $2 pane        terminal hint, or empty
+#   $3 session     session / thread / conversation id
+#   $4 source      claude-code | cursor | codex
+#   $5 workspace   project folder, or empty
+#   $6 state       thinking | coding | waiting | success | error
+MODE="$1"
+PANE="$2"
+SID="$3"
+SOURCE="$4"
+WS="$5"
+STATE="$6"
+echo "$(date '+%H:%M:%S') focus mode=$MODE source=$SOURCE state=$STATE sid=$SID ws=$WS pane=$PANE" >> /tmp/micropad-focus.log
+
+enc() {
+  /usr/bin/python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=""))' "$1"
+}
+
+case "$SOURCE" in
+  cursor*)
+    # Cursor's built-in deeplink extension runs in the Agents window too, so
+    # this lands there without spawning an editor window.
+    if [ -n "$SID" ]; then
+      open "cursor://anysphere.cursor-deeplink/agent?id=$(enc "$SID")"
+    fi
+    osascript -e 'tell application "Cursor" to activate' \
+      -e 'tell application "System Events" to tell process "Cursor" to perform action "AXRaise" of window "Cursor Agents"' \
+      >/dev/null 2>&1 || open -a "Cursor"
+    ;;
+  claude*)
+    if [ -n "$SID" ]; then
+      if [ "$STATE" = "waiting" ]; then
+        open "claude://code/needs-input?session=$(enc "$SID")&source=micropad"
+      else
+        open "claude://code/continue?session=$(enc "$SID")&source=micropad"
+      fi
+    else
+      open -a "Claude"
+    fi
+    ;;
+  codex*)
+    if [ -n "$SID" ] && [ "$SID" != "codex" ]; then
+      open "codex://threads/$(enc "$SID")"
+    else
+      open -a "Codex" 2>/dev/null || open -a "ChatGPT"
+    fi
+    ;;
+esac
 
 CMUX_BIN=/Applications/cmux.app/Contents/Resources/bin/cmux
-
 case "$PANE" in
-  cmux:*)    # cmux: switch to the surface. The socket only accepts processes
-    # started inside cmux, so we reuse the capability token the hook captured
-    # (claude_state.sh refreshes ~/.cache/micropad/cmux-auth.env from inside cmux).
+  cmux:*)
     [ -f "$HOME/.cache/micropad/cmux-auth.env" ] && . "$HOME/.cache/micropad/cmux-auth.env"
     export CMUX_SOCKET_CAPABILITY CMUX_SOCKET_PATH
     "$CMUX_BIN" rpc surface.focus "{\"surface_id\":\"${PANE#cmux:}\"}" >/dev/null 2>&1
-    [ "$MODE" = foreground ] && open -b com.cmuxterm.app 2>/dev/null ;;
-  orca:*)    orca terminal switch --terminal "${PANE#orca:}" 2>/dev/null ;;   # handle = term_xxx
+    [ "$MODE" = "foreground" ] && open -b com.cmuxterm.app 2>/dev/null
+    ;;
+  orca:*)    orca terminal switch --terminal "${PANE#orca:}" 2>/dev/null ;;
   tmux:*)    tmux select-pane -t "${PANE#tmux:}" 2>/dev/null ;;
   wezterm:*) wezterm cli activate-pane --pane-id "${PANE#wezterm:}" 2>/dev/null ;;
   kitty:*)   kitten @ focus-window --match "id:${PANE#kitty:}" 2>/dev/null ;;
-  *)         : ;;   # unknown terminal — add a case for yours
 esac
 exit 0
