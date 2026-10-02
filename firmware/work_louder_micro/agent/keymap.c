@@ -6,9 +6,9 @@
  * Two host-side features layered on stock VIA (keys/layers/encoders untouched):
  *   1. LED overlay  — host pushes a 12-byte state frame over a VIA custom
  *      channel; firmware paints + animates the 12 RGB-matrix LEDs locally.
- *   2. Focus (v2)   — hold the bottom-left touch and tap a status key; firmware
- *      reports which slot over raw HID (0xF1) and the host focuses that session.
- *      Tap the touch (no status key) = HOME (layer 0).
+ *   2. Focus        — pressing a lit key reports its LED index over raw HID
+ *      (0xF1) and types nothing; the host opens that session. Unlit keys keep
+ *      their VIA shortcuts. VAL_BOOTLOADER lets the host start a reflash.
  */
 #include QMK_KEYBOARD_H
 #include "raw_hid.h"
@@ -50,33 +50,53 @@ const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
 #define STALE_MS  4000   // no host frame this long -> fall back to idle
 
 enum agent_state {
-    ST_IDLE = 0, ST_THINK_CLAUDE, ST_THINK_CODEX,
-    ST_NEEDS, ST_DONE, ST_ERROR, ST_OFF = 0xFF,
+    ST_IDLE = 0,       /* 0 dim white */
+    ST_THINK_CLAUDE,   /* 1 amber breathe */
+    ST_THINK_CODEX,    /* 2 blue breathe */
+    ST_NEEDS,          /* 3 yellow blink, unknown source */
+    ST_DONE,           /* 4 green */
+    ST_ERROR,          /* 5 red/white strobe */
+    ST_THINK_CURSOR,   /* 6 violet breathe */
+    ST_NEEDS_CLAUDE,   /* 7 amber blink */
+    ST_NEEDS_CODEX,    /* 8 blue blink */
+    ST_NEEDS_CURSOR,   /* 9 violet blink */
+    ST_DONE_CLAUDE,    /* 10 solid amber, not green */
+    ST_DONE_CODEX,     /* 11 solid blue */
+    ST_DONE_CURSOR,    /* 12 solid violet */
+    ST_OFF = 0xFF,
 };
+
+static bool state_needs_input(uint8_t s) {
+    return s == ST_NEEDS || s == ST_NEEDS_CLAUDE || s == ST_NEEDS_CODEX || s == ST_NEEDS_CURSOR;
+}
+
+static bool state_done(uint8_t s) {
+    return s == ST_DONE || s == ST_DONE_CLAUDE || s == ST_DONE_CODEX || s == ST_DONE_CURSOR;
+}
 
 static uint8_t  st[NLED];      // state code per LED index (0 = idle)
 static uint32_t last_rx;       // timer of last host frame
 
-/* --- focus (v2): the ten translucent status keys are dedicated Agent Keys.
- * A tap emits a focus event to the host over raw HID; the host decides
- * single-tap = focus vs double-tap = foreground. They no longer type. */
-#define MSG_FOCUS 0xF1         // device -> host: a status key was tapped
+#define VAL_BOOTLOADER 0x02    // host -> pad: reboot into DFU for a hands-free reflash
+#define MSG_FOCUS      0xF1    // pad -> host: a lit session key was pressed
 
-/* matrix position -> RGB-matrix LED index, for the ten translucent status keys
- * (top three rows). Row 3 [3,1]/[3,2] are opaque green/red action keys, not
- * status slots, so they are excluded. */
-static int8_t status_led_index(uint8_t r, uint8_t c) {
-    if (r == 0 && c == 1) return 10;
-    if (r == 0 && c == 2) return 11;
-    if (r == 1 && c == 0) return 9;
-    if (r == 1 && c == 1) return 8;
-    if (r == 1 && c == 2) return 7;
-    if (r == 1 && c == 3) return 6;
-    if (r == 2 && c == 0) return 2;
-    if (r == 2 && c == 1) return 3;
-    if (r == 2 && c == 2) return 4;
-    if (r == 2 && c == 3) return 5;
-    return -1;
+static int8_t key_led_index(uint8_t r, uint8_t c) {
+    static const int8_t map[4][4] = {
+        { -1, 10, 11, -1 },
+        {  9,  8,  7,  6 },
+        {  2,  3,  4,  5 },
+        { -1,  1,  0, -1 },
+    };
+    if (r > 3 || c > 3) return -1;
+    return map[r][c];
+}
+
+static bool host_alive(void) {
+    return timer_elapsed32(last_rx) <= STALE_MS;
+}
+
+static bool key_has_session(int8_t led) {
+    return led >= 0 && host_alive() && st[led] != ST_OFF && st[led] != ST_IDLE;
 }
 
 static void send_focus(uint8_t led) {
@@ -131,18 +151,105 @@ static void underglow_set(uint8_t agg) {
     }
 }
 
+static void apply_layer_leds(void) {
+    layer_state_t state = layer_state;
+    layer_state_cmp(state, 1) ? work_louder_micro_led_1_on() : work_louder_micro_led_1_off();
+    layer_state_cmp(state, 2) ? work_louder_micro_led_2_on() : work_louder_micro_led_2_off();
+    layer_state_cmp(state, 3) ? work_louder_micro_led_3_on() : work_louder_micro_led_3_off();
+}
+
+static bool layer_leds_overridden = false;
+static uint8_t prev_done = 0;
+static uint32_t burst_start = 0;
+static bool burst_pending = false;
+static bool burst_active = false;
+
+static void set_alert_leds(bool on) {
+    if (on) {
+        work_louder_micro_led_1_on();
+        work_louder_micro_led_2_on();
+        work_louder_micro_led_3_on();
+    } else {
+        work_louder_micro_led_1_off();
+        work_louder_micro_led_2_off();
+        work_louder_micro_led_3_off();
+    }
+}
+
+/* Needs-input holds the 3 white LEDs in a blink. A completion plays three
+ * flashes, then the layer lights return. */
+static void paint_alert_leds(bool needs) {
+    if (needs) {
+        set_alert_leds((timer_read32() / 180) & 1);
+        layer_leds_overridden = true;
+        return;
+    }
+    if (burst_pending) {
+        burst_pending = false;
+        burst_active = true;
+        burst_start = timer_read32();
+    }
+    if (burst_active) {
+        uint32_t elapsed = timer_elapsed32(burst_start);
+        if (elapsed >= 1080) {
+            burst_active = false;
+        } else {
+            /* 180 ms on, 180 ms off, three times. */
+            set_alert_leds(((elapsed / 180) % 2) == 0);
+            layer_leds_overridden = true;
+            return;
+        }
+    }
+    if (layer_leds_overridden) {
+        apply_layer_leds();
+        layer_leds_overridden = false;
+    }
+}
+
+/* A key that just turned done blinks for DONE_FLASH_MS so you can see which
+ * session finished, then stays solid. */
+#define DONE_FLASH_MS 10000
+static uint8_t  prev_st[NLED];
+static uint32_t flash_start[NLED];
+static uint16_t flashing;      // bit per LED still in its done flash
+
+static bool done_flashing(uint8_t i) {
+    return (flashing >> i) & 1;
+}
+
 void housekeeping_task_user(void) {
     uint8_t agg = UG_CALM;
+    bool needs = false;
     if (timer_elapsed32(last_rx) <= STALE_MS) {
-        bool err = false, needs = false, done = false;
+        bool err = false;
+        uint8_t done = 0;
         for (uint8_t i = 0; i < NLED; i++) {
+            uint16_t bit = (uint16_t)1 << i;
+            if (state_done(st[i]) && !state_done(prev_st[i])) {
+                flash_start[i] = timer_read32();
+                flashing |= bit;
+            } else if (!state_done(st[i]) || timer_elapsed32(flash_start[i]) >= DONE_FLASH_MS) {
+                flashing &= ~bit;
+            }
+            prev_st[i] = st[i];
             if (st[i] == ST_ERROR) err = true;
-            else if (st[i] == ST_NEEDS) needs = true;
-            else if (st[i] == ST_DONE) done = true;
+            else if (state_needs_input(st[i])) needs = true;
+            else if (state_done(st[i])) done++;
         }
+        if (done > prev_done) {
+            burst_pending = true;
+        }
+        prev_done = done;
         agg = err ? UG_ERROR : needs ? UG_NEEDS : done ? UG_DONE : UG_CALM;
+    } else {
+        prev_done = 0;
+        burst_pending = false;
+        burst_active = false;
+        flashing = 0;
+        memcpy(prev_st, st, sizeof(prev_st));
     }
     underglow_set(agg);
+    paint_alert_leds(needs);
 }
 
 /* Keep VIA: intercept only our channel, defer everything else to VIA core. */
@@ -151,6 +258,11 @@ bool via_custom_value_command_kb(uint8_t *data, uint8_t length) {
     if (data[0] == id_custom_set_value && data[2] == VAL_FRAME) {
         memcpy(st, &data[3], NLED);
         last_rx = timer_read32();
+    } else if (data[0] == id_custom_set_value && data[2] == VAL_BOOTLOADER) {
+        raw_hid_send(data, length);
+        wait_ms(50);
+        reset_keyboard();
+        return true;
     }
     raw_hid_send(data, length);                      // VIA expects an echo
     return true;                                     // consumed
@@ -168,12 +280,20 @@ bool rgb_matrix_indicators_advanced_user(uint8_t led_min, uint8_t led_max) {
 
     for (uint8_t i = led_min; i < led_max && i < NLED; i++) {
         uint8_t s = stale ? ST_IDLE : st[i];
+        const uint8_t done_v = done_flashing(i) && ((t / 200) & 1) ? 0 : 150;
         HSV hsv;
         switch (s) {
-            case ST_THINK_CLAUDE: hsv = (HSV){ 20, 255, breath };            break; // amber breathe
+            case ST_THINK_CLAUDE: hsv = (HSV){ 28, 255, breath };            break; // amber breathe
             case ST_THINK_CODEX:  hsv = (HSV){170, 255, breath };            break; // blue breathe
+            case ST_THINK_CURSOR: hsv = (HSV){213, 255, breath };            break; // violet breathe
             case ST_NEEDS:        hsv = (HSV){ 43, 255, blink ? 150 : 0 };   break; // yellow blink
-            case ST_DONE:         hsv = (HSV){ 85, 255, 150 };               break; // green solid
+            case ST_NEEDS_CLAUDE: hsv = (HSV){ 28, 255, blink ? 150 : 0 };   break; // amber blink
+            case ST_NEEDS_CODEX:  hsv = (HSV){170, 255, blink ? 150 : 0 };   break; // blue blink
+            case ST_NEEDS_CURSOR: hsv = (HSV){213, 255, blink ? 150 : 0 };   break; // violet blink
+            case ST_DONE:         hsv = (HSV){  0,   0,  40 };              break; // dim white; green is the backlight
+            case ST_DONE_CLAUDE:  hsv = (HSV){ 28, 255, done_v };            break; // amber: flash, then solid
+            case ST_DONE_CODEX:   hsv = (HSV){170, 255, done_v };            break; // blue
+            case ST_DONE_CURSOR:  hsv = (HSV){213, 255, done_v };            break; // violet
             case ST_ERROR:        hsv = strobe ? (HSV){0,255,150}            // red / white strobe
                                               : (HSV){0,  0,150};            break;
             case ST_OFF:          hsv = (HSV){0, 0, 0};                      break; // off
@@ -185,15 +305,25 @@ bool rgb_matrix_indicators_advanced_user(uint8_t led_min, uint8_t led_max) {
     return false;   // we fully own these LEDs
 }
 
-/* On layer 0 the ten status keys are Agent Keys: a tap emits a focus event and
- * types nothing. On other layers (L1 = Codex, L2 = Claude Code) they fall
- * through to their per-app VIA shortcut. LEDs show status on every layer. */
+/* A lit key belongs to a session: pressing it opens that session and types
+ * nothing. A dark key has no session, so it keeps its VIA shortcut. */
+static uint16_t swallowed;     // bit per LED whose press we consumed
+
 bool process_record_user(uint16_t keycode, keyrecord_t *record) {
-    int8_t led = status_led_index(record->event.key.row, record->event.key.col);
-    if (led >= 0 && get_highest_layer(layer_state) == 0) {
-        if (record->event.pressed) {
+    (void)keycode;
+    int8_t led = key_led_index(record->event.key.row, record->event.key.col);
+    if (led < 0) return true;
+    uint16_t bit = (uint16_t)1 << led;
+    if (record->event.pressed) {
+        if (key_has_session(led)) {
             send_focus((uint8_t)led);
+            swallowed |= bit;
+            return false;
         }
+        return true;
+    }
+    if (swallowed & bit) {
+        swallowed &= ~bit;
         return false;
     }
     return true;
