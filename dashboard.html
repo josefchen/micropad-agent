@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Micro Pad · agents</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --bg: #0e0e10; --panel: #17171a; --line: #26262b; --text: #e8e6e3; --mute: #8a8890;
+    --claude: #ff9a3c; --codex: #4d8dff; --cursor: #b36bff; --error: #ff4d4d; --done: #3ddc84;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 13px/1.4 ui-sans-serif, -apple-system, "SF Pro Text", system-ui, sans-serif; }
+  main { max-width: 980px; margin: 0 auto; padding: 32px 24px; display: grid;
+         grid-template-columns: 380px 1fr; gap: 32px; }
+  h1 { font-size: 15px; font-weight: 600; margin: 0 0 4px; letter-spacing: .01em; }
+  .sub { color: var(--mute); margin-bottom: 20px; display: flex; gap: 10px; align-items: center; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--mute); display: inline-block; }
+  .dot.on { background: var(--done); box-shadow: 0 0 8px var(--done); }
+
+  .pad { background: var(--panel); border: 1px solid var(--line); border-radius: 22px; padding: 18px;
+         position: relative; transition: box-shadow .6s; }
+  .pad.glow-done { box-shadow: 0 0 0 1px #3ddc8455, 0 0 40px #3ddc8433; }
+  .pad.glow-waiting { box-shadow: 0 0 0 1px #ffd54a66, 0 0 40px #ffd54a33; }
+  .pad.glow-error { box-shadow: 0 0 0 1px #ff4d4d66, 0 0 40px #ff4d4d33; }
+  .leds { display: flex; gap: 8px; justify-content: center; margin-bottom: 14px; }
+  .leds i { width: 6px; height: 6px; border-radius: 50%; background: #333; }
+  .leds.blink i { animation: wl .36s steps(1) infinite; }
+  @keyframes wl { 50% { background: #fff; box-shadow: 0 0 6px #fff; } }
+  .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+  .key { aspect-ratio: 1; border-radius: 12px; background: #1f1f23; border: 1px solid var(--line);
+         position: relative; overflow: hidden; cursor: default; padding: 7px; display: flex;
+         flex-direction: column; justify-content: flex-end; transition: transform .08s; }
+  .key.live { cursor: pointer; }
+  .key.live:active { transform: scale(.96); }
+  .key .glow { position: absolute; inset: 0; background: var(--c); opacity: 0; }
+  .key.working .glow { animation: breathe 2.6s ease-in-out infinite; }
+  .key.waiting .glow { animation: blink .5s steps(1) infinite; }
+  .key.done .glow { opacity: .55; }
+  .key.error .glow { background: var(--error); animation: blink .16s steps(1) infinite; }
+  @keyframes breathe { 0%,100% { opacity: .08; } 50% { opacity: .6; } }
+  @keyframes blink { 50% { opacity: .65; } }
+  .key span { position: relative; font-size: 10px; line-height: 1.2; color: #fff;
+              text-shadow: 0 1px 2px #000a; display: -webkit-box; -webkit-line-clamp: 3;
+              -webkit-box-orient: vertical; overflow: hidden; }
+  .knob { border-radius: 50%; background: radial-gradient(circle at 35% 30%, #3a3a40, #1a1a1d);
+          border: 1px solid var(--line); aspect-ratio: 1; margin: 8px; }
+  .blank { aspect-ratio: 1; }
+
+  .legend { display: flex; gap: 14px; margin-top: 16px; color: var(--mute); font-size: 12px; flex-wrap: wrap; }
+  .legend b { display: inline-block; width: 9px; height: 9px; border-radius: 3px; margin-right: 5px;
+              vertical-align: -1px; }
+
+  .list h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--mute);
+             font-weight: 600; margin: 4px 0 10px; }
+  .row { display: grid; grid-template-columns: 10px 64px 1fr auto; gap: 12px; align-items: center;
+         padding: 10px 12px; border-radius: 10px; border: 1px solid transparent; cursor: pointer; }
+  .row:hover { background: var(--panel); border-color: var(--line); }
+  .row .sw { width: 10px; height: 10px; border-radius: 3px; background: var(--c); }
+  .row.working .sw { animation: breathe 2.6s ease-in-out infinite; }
+  .row.waiting .sw { animation: blink .5s steps(1) infinite; }
+  .row .st { color: var(--mute); font-size: 12px; }
+  .row.waiting .st { color: #ffd54a; } .row.error .st { color: var(--error); }
+  .row.done .st { color: var(--done); }
+  .row .t { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row .t small { color: var(--mute); margin-left: 8px; }
+  .row .a { color: var(--mute); font-variant-numeric: tabular-nums; font-size: 12px; }
+  .row.dim { opacity: .45; }
+  .empty { color: var(--mute); padding: 10px 12px; }
+</style>
+</head>
+<body>
+<main>
+  <section>
+    <h1>Micro Pad</h1>
+    <div class="sub"><span class="dot" id="paddot"></span><span id="padtxt">connecting…</span></div>
+    <div class="pad" id="pad">
+      <div class="leds" id="leds"><i></i><i></i><i></i></div>
+      <div class="grid" id="grid"></div>
+    </div>
+    <div class="legend">
+      <span><b style="background:var(--claude)"></b>Claude</span>
+      <span><b style="background:var(--codex)"></b>Codex</span>
+      <span><b style="background:var(--cursor)"></b>Cursor</span>
+      <span>breathe = working · blink = needs you · solid = done</span>
+    </div>
+  </section>
+  <section class="list">
+    <h2>On the pad</h2>
+    <div id="onpad"></div>
+    <h2 style="margin-top:22px">Recent, not on the pad</h2>
+    <div id="others"></div>
+  </section>
+</main>
+<script>
+const LAYOUT = [
+  ["wheel", 10, 11, "knob"],
+  [9, 8, 7, 6],
+  [2, 3, 4, 5],
+  [null, 1, 0, null],
+];
+const STATE = { working: "working", waiting: "needs you", done: "done", error: "error" };
+const color = f => `var(--${f || "mute"})`;
+const ago = s => s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m` : `${Math.floor(s / 3600)}h`;
+const esc = s => (s || "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const base = p => (p || "").split("/").filter(Boolean).pop() || "";
+
+function open(body) {
+  fetch("/open", { method: "POST", headers: { "X-Micropad": "1" }, body: JSON.stringify(body) }).then(tick);
+}
+
+function row(s, dim) {
+  const el = document.createElement("div");
+  el.className = `row ${s.state}${dim ? " dim" : ""}`;
+  el.style.setProperty("--c", color(s.family));
+  const label = dim && s.state === "working" ? "stalled" : STATE[s.state] || s.state;
+  el.innerHTML = `<i class="sw"></i><span class="st">${label}</span>
+    <span class="t">${esc(s.title || base(s.workspace) || s.sid.slice(0, 8))}<small>${esc(base(s.workspace))}</small></span>
+    <span class="a">${ago(s.age)}</span>`;
+  el.onclick = () => open({ sid: s.sid });
+  return el;
+}
+
+function render(d) {
+  document.getElementById("paddot").className = "dot" + (d.pad ? " on" : "");
+  document.getElementById("padtxt").textContent = d.pad ? "pad connected" : "pad not connected (close usevia.app?)";
+  const byLed = Object.fromEntries(d.keys.map(k => [k.led, k]));
+  const grid = document.getElementById("grid");
+  grid.innerHTML = "";
+  for (const r of LAYOUT) for (const cell of r) {
+    if (cell === "wheel" || cell === "knob") { grid.append(Object.assign(document.createElement("div"), { className: "knob" })); continue; }
+    if (cell === null) { grid.append(Object.assign(document.createElement("div"), { className: "blank" })); continue; }
+    const k = byLed[cell] || {};
+    const el = document.createElement("div");
+    el.className = "key" + (k.sid ? ` live ${k.state}` : "");
+    el.style.setProperty("--c", color(k.family));
+    el.title = k.sid ? `${k.family} · ${STATE[k.state]} · ${k.title || ""}` : "free: VIA shortcut";
+    el.innerHTML = `<div class="glow"></div><span>${esc(k.title || base(k.workspace))}</span>`;
+    if (k.sid) el.onclick = () => open({ sid: k.sid });
+    grid.append(el);
+  }
+  const live = d.keys.filter(k => k.sid);
+  const any = st => live.some(k => k.state === st);
+  document.getElementById("leds").className = "leds" + (any("waiting") ? " blink" : "");
+  document.getElementById("pad").className = "pad" + (any("error") ? " glow-error" : any("waiting") ? " glow-waiting" : any("done") ? " glow-done" : "");
+  const onpad = document.getElementById("onpad");
+  onpad.innerHTML = "";
+  live.length ? live.forEach(k => onpad.append(row(k))) : onpad.innerHTML = `<div class="empty">Nothing running.</div>`;
+  const others = document.getElementById("others");
+  others.innerHTML = "";
+  d.others.length ? d.others.forEach(s => others.append(row(s, true))) : others.innerHTML = `<div class="empty">—</div>`;
+}
+
+function tick() {
+  fetch("/state").then(r => r.json()).then(render).catch(() => {
+    document.getElementById("paddot").className = "dot";
+    document.getElementById("padtxt").textContent = "daemon not running";
+  });
+}
+tick();
+setInterval(tick, 1000);
+</script>
+</body>
+</html>

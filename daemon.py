@@ -35,8 +35,9 @@ EFFECT_SOLID = 1
 # only the working states keep the agent's identity hue, Codex-Micro style, so the
 # pad reads as "what's happening" first and "who" only while it's actually running.
 # Claude's orange is pushed up to amber (28) — at hue 12 it washed into red on the pad.
-HUE_CLAUDE, HUE_CODEX = 28, 170              # amber / blue — shown only while working
-HUE_DONE, HUE_INPUT, HUE_ERROR = 85, 45, 0   # green done / yellow needs-you / red error
+HUE_CLAUDE, HUE_CODEX, HUE_CURSOR = 28, 170, 213   # amber / blue / violet
+HUE_DONE, HUE_INPUT, HUE_ERROR = 85, 45, 0          # green done / yellow needs-you / red error
+FAMILY_HUE = (("claude", HUE_CLAUDE), ("cursor", HUE_CURSOR), ("codex", HUE_CODEX))
 
 PORT = 48801
 FRAME_HZ = 20
@@ -49,6 +50,7 @@ class Pad:
     def __init__(self):
         self.dev = None
         self._last = None   # (hue, sat, bright) — skip redundant writes
+        self._miss_logged = False
 
     def _open(self):
         for d in hid.enumerate(VID, PID):
@@ -57,7 +59,12 @@ class Pad:
                 self._last = None
                 for ch in (CH_RGB_MATRIX, CH_RGBLIGHT):
                     self._send([CUSTOM_SET_VALUE, ch, V_EFFECT, EFFECT_SOLID])
+                print("micropad connected", flush=True)
+                self._miss_logged = False
                 return True
+        if not self._miss_logged:
+            print("micropad not open (unplugged, or usevia.app still has WebHID)", flush=True)
+            self._miss_logged = True
         return False
 
     def _send(self, payload):
@@ -74,7 +81,8 @@ class Pad:
                 self._send([CUSTOM_SET_VALUE, ch, V_COLOR, hue, sat])
                 self._send([CUSTOM_SET_VALUE, ch, V_BRIGHTNESS, bright])
             self._last = frame
-        except Exception:
+        except Exception as exc:
+            print(f"micropad write failed: {exc}", flush=True)
             self.dev = None   # unplugged; retry on the next frame
 
 
@@ -89,7 +97,30 @@ PRIORITY = {"idle": 0, "success": 1, "thinking": 2, "coding": 2, "waiting": 3, "
 # agent that needs you always matters more than one that's done.
 SUCCESS_ANNOUNCE_S = 6.0
 SUCCESS_ANNOUNCE_PRIORITY = 2.5
-AGENT_HUE = {"claude-code": HUE_CLAUDE, "codex": HUE_CODEX}
+AGENT_HUE = {"claude-code": HUE_CLAUDE, "codex": HUE_CODEX, "cursor": HUE_CODEX}
+
+
+def hue_for(source):
+    """Identity hue while an agent is working."""
+    source = source or ""
+    if source.startswith("cursor"):
+        return HUE_CURSOR
+    if source.startswith("codex"):
+        return HUE_CODEX
+    if source.startswith("claude"):
+        return HUE_CLAUDE
+    return AGENT_HUE.get(source, HUE_CLAUDE)
+
+
+def working_hues():
+    """One hue per AI that is working right now, in a stable order."""
+    present = set()
+    with _lock:
+        for source, s in _agents.items():
+            if s["state"] in ("thinking", "coding"):
+                present.add(source.split(":", 1)[0])
+    hues = [hue for name, hue in FAMILY_HUE if any(p.startswith(name) for p in present)]
+    return hues
 
 _lock = threading.Lock()
 _agents = {}   # source -> {"state": str, "ts": float}
@@ -146,11 +177,13 @@ def frame_for(source, state, t):
         # yellow, 2Hz blink — needs your input
         return HUE_INPUT, 255, MAX_BRIGHT if int(t * 4) % 2 else 0
     if state in ("thinking", "coding"):
-        # agent colour, breathing. coding breathes a little faster than thinking.
-        hue = AGENT_HUE.get(source, HUE_CLAUDE)
-        period = 1.4 if state == "coding" else 2.2
-        phase = (math.sin(2 * math.pi * t / period) + 1) / 2      # 0..1
-        return hue, 255, int(MAX_BRIGHT * (0.12 + 0.88 * phase))
+        # One breath per working AI, then the next colour. A single AI stays put.
+        hues = working_hues() or [hue_for(source or "")]
+        period = 1.6
+        slot = int(t / period) % len(hues)
+        local = (t % period) / period
+        phase = (math.sin(2 * math.pi * local) + 1) / 2
+        return hues[slot], 255, int(MAX_BRIGHT * (0.12 + 0.88 * phase))
     if state == "success":
         return HUE_DONE, 255, MAX_BRIGHT      # green, solid
     return 0, 0, 14   # idle — dim white standby
@@ -165,7 +198,10 @@ class Handler(BaseHTTPRequestHandler):
         try:
             n = int(self.headers.get("Content-Length", 0))
             body = json.loads(self.rfile.read(n) or b"{}")
-            record(body.get("source", "claude-code"), body.get("state", "idle"))
+            source = body.get("source") or "claude-code"
+            session = body.get("session") or ""
+            key = f"{source}:{session}" if session else source
+            record(key, body.get("state", "idle"))
             self.send_response(204)
         except Exception:
             self.send_response(400)

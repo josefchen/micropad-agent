@@ -1,19 +1,22 @@
 #!/usr/bin/env python3
-"""micropad-agent — per-key renderer (Tier B, v2). REQUIRES the custom `agent`
-firmware flashed (see docs/per-key-led-design.md). Standalone on purpose so it
-never disturbs the stock-firmware daemon.py.
+"""micropad-agent — per-key renderer. REQUIRES the custom `agent` firmware
+(firmware/work_louder_micro/agent).
 
-  1. launchctl unload the global daemon (it owns :48801 and the pad)
-  2. ./run.sh daemon_perkey.py            (or ./bootstrap.sh --per-key)
+One keycap per live agent session, coloured by app (Claude amber, Codex blue,
+Cursor violet). Sessions come from two places, merged by "newest record wins":
 
-v2 — one status LED per concurrent session. Hooks POST
-{"state":..,"source":..,"session":..}; the daemon assigns each new session a
-free LED slot, paints that slot with the session's state, and frees the slot
-when the session ends (Claude SessionEnd -> "idle") or a "done" decays.
+  * sources.scan()  the session files the Claude, Codex and Cursor apps write,
+                    so the pad mirrors their GUIs (including Claude SSH sessions)
+  * POST /state     hooks, for instant updates and permission prompts
 
-Graceful degrade: if a POST carries no "session" (older hooks, or a Codex notify
-with no thread id), the source name is used as the key — so you still get one
-slot for Claude and one for Codex, exactly like v1's two-agent case.
+Key behaviour:
+  working  breathes        waiting  blinks + the 3 white LEDs blink
+  done     solid, "unread" until you press it (or DONE_SHOW_S passes);
+           the underglow goes green and the white LEDs flash 3 times
+  press a lit key  -> opens that session (done keys are then cleared)
+  unlit keys keep their VIA shortcuts
+
+http://127.0.0.1:48801/ shows a live mirror of the pad.
 """
 import json
 import os
@@ -22,120 +25,249 @@ import subprocess
 import threading
 import time
 import uuid
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from dataclasses import asdict, dataclass
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import hid
 
+import sources
+
 HERE = os.path.dirname(os.path.abspath(__file__))
+STATE_FILE = os.path.expanduser("~/.cache/micropad/state.json")
 
 VID, PID = 0x574C, 0xE6E3
 RAW_USAGE_PAGE, RAW_USAGE = 0xFF60, 0x61
 
-# VIA custom command envelope (matches keymap.c)
 ID_CUSTOM_SET_VALUE = 0x07
-CH_AGENT, VAL_FRAME = 0x30, 0x01
-
-# device -> host focus event (keymap.c: hold bottom-left touch, tap a status key)
+CH_AGENT, VAL_FRAME, VAL_BOOTLOADER = 0x30, 0x01, 0x02
 MSG_FOCUS = 0xF1
-DOUBLE_TAP_S = 0.4       # two taps within this window -> foreground instead of focus
+DOUBLE_TAP_S = 0.4
 
 NLED = 12
 PORT = 48801
-HEARTBEAT_S = 2.0        # resend so the firmware's STALE fallback never trips
-DONE_DECAY_S = 45.0      # a finished session fades out (and frees its slot) after this
-STALE_SESSION_S = 300.0  # safety net: drop a session gone silent for this long
+HEARTBEAT_S = 2.0
+SCAN_S = 2.0
+
+# How long each state keeps its key after the last record that set it.
+SHOW_S = {"working": 20 * 60, "waiting": 60 * 60, "done": 30 * 60, "error": 30 * 60}
+PRIORITY = {"waiting": 0, "error": 1, "working": 2, "done": 3}
 
 # state codes — must match enum agent_state in keymap.c
-IDLE, THINK_CLAUDE, THINK_CODEX, NEEDS, DONE, ERROR, OFF = 0, 1, 2, 3, 4, 5, 0xFF
+IDLE, THINK_CLAUDE, THINK_CODEX, NEEDS, DONE, ERROR = 0, 1, 2, 3, 4, 5
+THINK_CURSOR, NEEDS_CLAUDE, NEEDS_CODEX, NEEDS_CURSOR = 6, 7, 8, 9
+DONE_CLAUDE, DONE_CODEX, DONE_CURSOR = 10, 11, 12
+OFF = 0xFF
 
-# LED indices reserved as per-session status slots. Position encodes the agent:
-# the LEFT half (cols 0-1) is Claude, the RIGHT half (cols 2-3) is Codex, across
-# the translucent top 3 rows. See docs/per-key-led-design.md.
-#   row0:        [10][11]         left  (Claude): 10,9,8,2,3
-#   row1:    [9][ 8][ 7][6]       right (Codex) : 11,7,6,4,5
-#   row2:    [2][ 3][ 4][5]       row3 [1]/[0] = opaque green/red action keys
-CLAUDE_SLOTS = [10, 9, 8, 2, 3]   # left half, reading order top->bottom
-CODEX_SLOTS = [11, 7, 6, 4, 5]    # right half
-SLOTS = CLAUDE_SLOTS + CODEX_SLOTS   # full status strip (render baseline)
+CODES = {
+    "claude": {"working": THINK_CLAUDE, "waiting": NEEDS_CLAUDE, "done": DONE_CLAUDE},
+    "codex":  {"working": THINK_CODEX,  "waiting": NEEDS_CODEX,  "done": DONE_CODEX},
+    "cursor": {"working": THINK_CURSOR, "waiting": NEEDS_CURSOR, "done": DONE_CURSOR},
+}
+LABEL = {"claude": "Claude", "codex": "Codex", "cursor": "Cursor"}
+HOOK_STATE = {"thinking": "working", "coding": "working", "waiting": "waiting",
+              "success": "done", "error": "error"}
+
+# Filled bottom-up, left to right, so the first sessions sit nearest the hands.
+#   row0:        [10][11]     last
+#   row1:    [9][ 8][ 7][6]
+#   row2:    [2][ 3][ 4][5]
+#   row3:        [ 1][ 0]     first
+LED_ORDER = [1, 0, 2, 3, 4, 5, 9, 8, 7, 6, 10, 11]
 
 
-# (source, state) -> code. source only matters while working.
-def state_code(source, state):
-    if state == "error":                       return ERROR
-    if state == "waiting":                     return NEEDS
-    if state == "success":                     return DONE
-    if state in ("thinking", "coding"):
-        return THINK_CODEX if source == "codex" else THINK_CLAUDE
-    return IDLE
+def family_of(source):
+    source = source or ""
+    for fam in CODES:
+        if source.startswith(fam):
+            return fam
+    return ""
+
+
+def code_for(family, state):
+    if state == "error":
+        return ERROR
+    return CODES.get(family, {}).get(state, {"waiting": NEEDS, "done": DONE}.get(state, IDLE))
+
+
+@dataclass
+class Session:
+    sid: str
+    family: str
+    state: str
+    ts: float              # wall time of the record that set `state`
+    title: str = ""
+    workspace: str = ""
+    pane: str = ""
+    app_id: str = ""
 
 
 _lock = threading.Lock()
-_sessions = {}   # key -> {"source", "state", "ts"}
-_slots = {}      # key -> LED index (a SLOTS entry)
+_files = {}     # sid -> Session from the last file scan
+_hooks = {}     # sid -> Session from hook POSTs
+_acked = {}     # sid -> wall time the user opened it from the pad
+_slots = {}     # sid -> LED index
+_view = {}      # sid -> merged Session, rebuilt by refresh()
+_last_state = {}
+_notified = {}  # sid -> (state, record ts) last announced; one alert per finished turn
+_seeded = False
+_pad_ok = False
 
 
-def _pool(source):
-    return CODEX_SLOTS if source == "codex" else CLAUDE_SLOTS
+def _load():
+    try:
+        with open(STATE_FILE) as f:
+            d = json.load(f)
+    except (OSError, ValueError):
+        return
+    _acked.update(d.get("acked", {}))
+    _slots.update({k: int(v) for k, v in d.get("slots", {}).items()})
+    for s in d.get("hooks", []):
+        try:
+            _hooks[s["sid"]] = Session(**s)
+        except TypeError:
+            pass
 
 
-def _free_slot(source):
-    used = set(_slots.values())
-    for s in _pool(source):          # prefer this agent's own cluster
-        if s not in used:
-            return s
-    for s in SLOTS:                  # own cluster full -> spill into any free slot
-        if s not in used:
-            return s
-    return None
+def _save():
+    os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
+    cutoff = time.time() - 24 * 3600
+    data = {
+        "acked": {k: v for k, v in _acked.items() if v > cutoff},
+        "slots": _slots,
+        "hooks": [asdict(s) for s in _hooks.values() if s.ts > cutoff],
+    }
+    tmp = STATE_FILE + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(data, f)
+    os.replace(tmp, STATE_FILE)
 
 
-def _assign(key, source):
-    """Give `key` a slot from its agent's cluster, else any free slot, else evict
-    the least-recently-active session so a live one is never starved."""
-    slot = _free_slot(source)
-    if slot is not None:
-        return slot
-    if _slots:
-        victim = min(_slots, key=lambda k: _sessions.get(k, {}).get("ts", 0.0))
-        slot = _slots.pop(victim)
-        _sessions.pop(victim, None)
-        return slot
-    return None
+def _merge(sid):
+    f, h = _files.get(sid), _hooks.get(sid)
+    if f and h:
+        best = h if h.ts > f.ts else f
+        family = "cursor" if "cursor" in (f.family, h.family) else f.family
+        return Session(sid, family, best.state, best.ts, f.title or h.title,
+                       h.workspace or f.workspace, h.pane, f.app_id)
+    s = f or h
+    return Session(**asdict(s))
 
 
-def record(key, source, state, pane=""):
-    now = time.monotonic()
+def _visible(s, now):
+    if now - s.ts > SHOW_S.get(s.state, 0):
+        return False
+    if s.state in ("done", "error") and _acked.get(s.sid, 0) >= s.ts:
+        return False
+    return True
+
+
+def refresh():
+    """Rebuild the merged view, keep every visible session on the key it already
+    had, and hand free keys to newcomers by urgency."""
+    global _seeded
+    now = time.time()
     with _lock:
-        # "idle" is only ever posted by Claude's SessionEnd -> session is gone.
+        merged = {sid: _merge(sid) for sid in set(_files) | set(_hooks)}
+        live = {sid: s for sid, s in merged.items() if _visible(s, now)}
+        for sid in [k for k in _slots if k not in live]:
+            del _slots[sid]
+        rank = lambda s: (PRIORITY.get(s.state, 9), -s.ts)
+        for s in sorted((s for s in live.values() if s.sid not in _slots), key=rank):
+            used = set(_slots.values())
+            free = [led for led in LED_ORDER if led not in used]
+            if free:
+                _slots[s.sid] = free[0]
+                continue
+            victim = max(_slots, key=lambda k: rank(live[k]))
+            if rank(live[victim]) > rank(s):
+                _slots[s.sid] = _slots.pop(victim)
+        changes = []
+        for sid, s in live.items():
+            prev = _last_state.get(sid)
+            if _seeded and prev != s.state and s.state in ("done", "waiting", "error") and (
+                    s.state == "waiting" or prev in ("working", "waiting")) and (
+                    _notified.get(sid) != (s.state, s.ts)):
+                _notified[sid] = (s.state, s.ts)
+                changes.append(s)
+        _last_state.clear()
+        _last_state.update({sid: s.state for sid, s in live.items()})
+        _view.clear()
+        _view.update(merged)
+        _seeded = True
+        try:
+            _save()
+        except OSError:
+            pass
+    for s in changes:
+        notify(s)
+
+
+def notify(s):
+    if os.environ.get("MICROPAD_NOTIFY", "1") == "0":
+        return
+    verb = {"done": "finished", "waiting": "needs you", "error": "hit an error"}[s.state]
+    title = f"{LABEL.get(s.family, 'Agent')} {verb}"
+    body = s.title or os.path.basename(s.workspace) or s.sid[:8]
+    sound = "Glass" if s.state == "done" else "Ping"
+    script = f"display notification {json.dumps(body)} with title {json.dumps(title)} sound name {json.dumps(sound)}"
+    print(f"notify: {title}: {body}", flush=True)
+    try:
+        subprocess.Popen(["osascript", "-e", script],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except OSError:
+        pass
+
+
+_scan_beat = time.monotonic()
+WATCHDOG_S = 60.0
+
+
+def scan_loop():
+    global _scan_beat
+    while True:
+        _scan_beat = time.monotonic()
+        try:
+            found = {o.sid: Session(o.sid, o.family, o.state, o.ts, o.title, o.workspace, app_id=o.app_id)
+                     for o in sources.scan()}
+            with _lock:
+                _files.clear()
+                _files.update(found)
+            refresh()
+        except Exception as exc:
+            print(f"scan loop error: {exc}", flush=True)
+        time.sleep(SCAN_S)
+
+
+def record_hook(sid, source, state, pane="", workspace=""):
+    now = time.time()
+    with _lock:
         if state == "idle":
-            _sessions.pop(key, None)
-            _slots.pop(key, None)
-            return
-        s = _sessions.get(key)
-        if s is None:
-            _slots[key] = _assign(key, source)
-            _sessions[key] = {"source": source, "state": state, "ts": now, "pane": pane}
+            _hooks.pop(sid, None)
+            _acked[sid] = now
         else:
-            s["source"], s["state"], s["ts"] = source, state, now
-            if pane:
-                s["pane"] = pane   # refresh the focus hint if the hook sent one
+            prev = _hooks.get(sid)
+            family = family_of(source)
+            if prev and prev.family == "cursor":
+                family = "cursor"
+            _hooks[sid] = Session(sid, family, HOOK_STATE.get(state, "working"), now,
+                                  prev.title if prev else "",
+                                  workspace or (prev.workspace if prev else ""),
+                                  pane or (prev.pane if prev else ""))
+    refresh()
 
 
-def reap():
-    now = time.monotonic()
+def frame():
+    f = [OFF] * NLED
     with _lock:
-        for key in list(_sessions):
-            s = _sessions[key]
-            age = now - s["ts"]
-            if (s["state"] == "success" and age > DONE_DECAY_S) or age > STALE_SESSION_S:
-                _sessions.pop(key, None)
-                _slots.pop(key, None)
+        for sid, led in _slots.items():
+            s = _view.get(sid)
+            if s:
+                f[led] = code_for(s.family, s.state)
+    return f
 
 
-# --- focus (v2): a status key was tapped while the bottom-left touch was held.
-# The firmware reports the LED index; here we turn it into a background focus,
-# a foreground (double-tap), or a spawn (empty slot), via overridable hooks.
-_focus_last = {}   # led index -> monotonic time of last tap
+# --- opening sessions ------------------------------------------------------
+_focus_last = {}
 
 
 def _run_hook(name, args):
@@ -155,7 +287,6 @@ CMUX_AUTH = os.path.expanduser("~/.cache/micropad/cmux-auth.env")
 
 
 def _cmux_rpc(method, params, timeout=1.5):
-    """One request over the cmux unix socket. Returns the parsed reply or None."""
     cap = sock_path = None
     try:
         with open(CMUX_AUTH) as f:
@@ -192,114 +323,169 @@ def _cmux_rpc(method, params, timeout=1.5):
         s.close()
 
 
-def handle_focus(led):
-    now = time.monotonic()
-    double = (now - _focus_last.get(led, 0.0)) < DOUBLE_TAP_S
-    _focus_last[led] = now
+def open_session(sid):
     with _lock:
-        key = next((k for k, s in _slots.items() if s == led), None)
-        sess = _sessions.get(key) if key else None
-        pane = sess.get("pane", "") if sess else ""
-    if sess is None:
-        _run_hook("spawn_session.sh", [str(led)])            # empty slot -> new agent
-    elif pane.startswith("cmux:"):
-        # direct socket = ~5 ms vs ~150 ms for the CLI
-        ok = _cmux_rpc("surface.focus", {"surface_id": pane[5:]})
+        s = _view.get(sid)
+        if s is None:
+            return False
+        led = _slots.get(sid)
+        if s.state in ("done", "error"):
+            _acked[sid] = time.time()
+    now = time.monotonic()
+    double = led is not None and (now - _focus_last.get(led, 0.0)) < DOUBLE_TAP_S
+    if led is not None:
+        _focus_last[led] = now
+    mode = "foreground" if double else "focus"
+    hook_state = {"working": "thinking", "done": "success"}.get(s.state, s.state)
+    print(f"open {s.family} {sid[:8]} ({s.state}) {s.title!r}", flush=True)
+    if s.pane.startswith("cmux:") and _cmux_rpc("surface.focus", {"surface_id": s.pane[5:]}) is not None:
         if double:
             subprocess.Popen(["open", "-b", "com.cmuxterm.app"],
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        if ok is None:   # stale token / socket gone -> fall back to the CLI hook
-            _run_hook("focus_session.sh", ["foreground" if double else "focus", pane, key])
     else:
-        _run_hook("focus_session.sh", ["foreground" if double else "focus", pane, key])
+        _run_hook("focus_session.sh", [mode, s.pane, s.app_id or sid, s.family, s.workspace, hook_state])
+    refresh()
+    return True
 
 
-def frame():
-    """Baseline: the SLOTS keys glow dim-white as a status strip; non-slot keys
-    are off. Each active session paints its own slot with its state colour."""
-    f = [OFF] * NLED
-    for s in SLOTS:
-        f[s] = IDLE
+def handle_focus(led):
     with _lock:
-        for key, slot in _slots.items():
-            sess = _sessions.get(key)
-            if slot is None or sess is None:
-                continue
-            f[slot] = state_code(sess["source"], sess["state"])
-    return f
+        sid = next((k for k, v in _slots.items() if v == led), None)
+    if sid:
+        open_session(sid)
 
+
+def snapshot():
+    now = time.time()
+    with _lock:
+        by_led = {led: sid for sid, led in _slots.items()}
+        keys = []
+        for led in LED_ORDER:
+            sid = by_led.get(led)
+            s = _view.get(sid) if sid else None
+            keys.append({"led": led, **({"sid": s.sid, "family": s.family, "state": s.state,
+                                          "age": int(now - s.ts), "title": s.title,
+                                          "workspace": s.workspace} if s else {})})
+        recent = sorted(_view.values(), key=lambda s: -s.ts)
+        others = [{"sid": s.sid, "family": s.family, "state": s.state, "age": int(now - s.ts),
+                   "title": s.title, "workspace": s.workspace}
+                  for s in recent if s.sid not in _slots][:20]
+    return {"pad": _pad_ok, "keys": keys, "others": others}
+
+
+# --- device ----------------------------------------------------------------
 
 class Pad:
     """Sends 12-byte state frames over the VIA custom channel. Reconnects."""
     def __init__(self):
         self.dev = None
         self._last = None
+        self._miss_logged = False
+        self.wlock = threading.Lock()
 
     def _open(self):
+        global _pad_ok
         for d in hid.enumerate(VID, PID):
             if d.get("usage_page") == RAW_USAGE_PAGE and d.get("usage") == RAW_USAGE:
                 self.dev = hid.Device(path=d["path"])
                 self._last = None
+                self._miss_logged = False
+                _pad_ok = True
+                print("micropad connected", flush=True)
                 return True
+        _pad_ok = False
+        if not self._miss_logged:
+            print("micropad not open (unplugged, or usevia.app still has WebHID)", flush=True)
+            self._miss_logged = True
         return False
 
-    def show(self, frame):
-        frame = bytes(frame)
-        if frame == self._last:
-            return
+    def _drop(self):
+        global _pad_ok
+        self.dev = None
+        _pad_ok = False
+
+    def send(self, value, data=b""):
         if self.dev is None and not self._open():
-            return
+            return False
+        payload = bytes([ID_CUSTOM_SET_VALUE, CH_AGENT, value]) + bytes(data)
         try:
-            payload = bytes([ID_CUSTOM_SET_VALUE, CH_AGENT, VAL_FRAME]) + frame
-            self.dev.write(b"\x00" + payload + b"\x00" * (32 - len(payload)))
-            self._last = frame
+            with self.wlock:
+                self.dev.write(b"\x00" + payload + b"\x00" * (32 - len(payload)))
+            return True
         except Exception:
-            self.dev = None   # unplugged; retry next tick
+            self._drop()
+            return False
+
+    def show(self, f):
+        f = bytes(f)
+        if f != self._last and self.send(VAL_FRAME, f):
+            self._last = f
 
     def read(self, timeout_ms=120):
-        """Poll for a device->host report (focus events). Also drains the VIA
-        echo the firmware sends after each frame; callers filter by MSG_FOCUS."""
         if self.dev is None and not self._open():
+            time.sleep(timeout_ms / 1000)
             return None
         try:
             d = self.dev.read(32, timeout_ms)
             return bytes(d) if d else None
         except Exception:
-            self.dev = None
+            self._drop()
             return None
 
 
+PAD = Pad()
+DASHBOARD = os.path.join(HERE, "dashboard.html")
+
+
 class Handler(BaseHTTPRequestHandler):
-    def do_POST(self):
-        if self.path != "/state":
-            self.send_response(404); self.end_headers(); return
-        try:
-            n = int(self.headers.get("Content-Length", 0))
-            body = json.loads(self.rfile.read(n) or b"{}")
-            source = body.get("source", "claude-code")
-            state = body.get("state", "idle")
-            key = body.get("session") or source   # no session id -> per-source slot
-            record(key, source, state, body.get("pane") or "")
-            self.send_response(204)
-        except Exception:
-            self.send_response(400)
+    def _json(self, code, obj):
+        payload = json.dumps(obj).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
+        self.wfile.write(payload)
+
+    def _body(self):
+        n = int(self.headers.get("Content-Length", 0))
+        return json.loads(self.rfile.read(n) or b"{}")
+
+    def do_POST(self):
+        try:
+            body = self._body()
+        except ValueError:
+            self.send_response(400); self.end_headers(); return
+        if self.path in ("/open", "/bootloader") and self.headers.get("X-Micropad") != "1":
+            self.send_response(403); self.end_headers(); return
+        if self.path == "/state":
+            source = body.get("source", "claude-code")
+            sid = body.get("session") or source
+            record_hook(sid, source, body.get("state", "idle"),
+                        body.get("pane") or "", body.get("workspace") or "")
+            self.send_response(204); self.end_headers(); return
+        if self.path == "/open":
+            sid = body.get("sid")
+            if sid is None and "led" in body:
+                with _lock:
+                    sid = next((k for k, v in _slots.items() if v == int(body["led"])), None)
+            self._json(200 if sid and open_session(sid) else 404, {}); return
+        if self.path == "/bootloader":
+            self._json(200 if PAD.send(VAL_BOOTLOADER) else 503, {}); return
+        self.send_response(404); self.end_headers()
 
     def do_GET(self):
         if self.path == "/health":
-            self.send_response(200); self.end_headers(); self.wfile.write(b"ok"); return
-        if self.path == "/state":       # debug view of slot assignment
-            with _lock:
-                data = {
-                    "slots": {str(slot): key for key, slot in _slots.items()},
-                    "sessions": {
-                        k: {"source": s["source"], "state": s["state"], "pane": s.get("pane", "")}
-                        for k, s in _sessions.items()
-                    },
-                }
-            payload = json.dumps(data).encode()
+            self._json(200, {"ok": True, "pad": _pad_ok}); return
+        if self.path == "/state":
+            self._json(200, snapshot()); return
+        if self.path in ("/", "/index.html"):
+            try:
+                with open(DASHBOARD, "rb") as f:
+                    payload = f.read()
+            except OSError:
+                self.send_response(404); self.end_headers(); return
             self.send_response(200)
-            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(payload)))
             self.end_headers()
             self.wfile.write(payload); return
@@ -310,22 +496,29 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    pad = Pad()
-    srv = HTTPServer(("127.0.0.1", PORT), Handler)
+    _load()
+    srv = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
-    print(f"micropad-agent per-key renderer (v2 + focus) on 127.0.0.1:{PORT}")
+    threading.Thread(target=scan_loop, daemon=True).start()
+    print(f"micropad-agent on http://127.0.0.1:{PORT}/", flush=True)
     last_beat = 0.0
     while True:
-        reap()
-        f = frame()
-        now = time.monotonic()
-        if now - last_beat > HEARTBEAT_S:   # periodic resend keeps firmware fresh
-            pad._last = None
-            last_beat = now
-        pad.show(f)
-        ev = pad.read(120)                  # focus events + the read paces the loop
-        if ev and len(ev) >= 2 and ev[0] == MSG_FOCUS:
-            handle_focus(ev[1])
+        try:
+            now = time.monotonic()
+            if now - _scan_beat > WATCHDOG_S:
+                print("watchdog: session scanner stalled, exiting so launchd restarts us", flush=True)
+                os._exit(1)
+            if now - last_beat > HEARTBEAT_S:
+                PAD._last = None
+                last_beat = now
+            PAD.show(frame())
+            ev = PAD.read(120)
+            if ev and len(ev) >= 2 and ev[0] == MSG_FOCUS:
+                threading.Thread(target=handle_focus, args=(ev[1],), daemon=True).start()
+        except Exception as exc:
+            print(f"render loop error: {exc}", flush=True)
+            PAD._drop()
+            time.sleep(0.5)
 
 
 if __name__ == "__main__":
