@@ -68,6 +68,8 @@
   .row .a { color: var(--mute); font-variant-numeric: tabular-nums; font-size: 12px; }
   .row.dim { opacity: .45; }
   .empty { color: var(--mute); padding: 10px 12px; }
+  .warn { background: #3a2a10; border: 1px solid #ffd54a55; color: #ffd54a; border-radius: 10px;
+          padding: 10px 12px; margin-bottom: 14px; font-size: 12px; }
 </style>
 </head>
 <body>
@@ -75,6 +77,7 @@
   <section>
     <h1>Micro Pad</h1>
     <div class="sub"><span class="dot" id="paddot"></span><span id="padtxt">connecting…</span></div>
+    <div class="warn" id="warn" hidden></div>
     <div class="pad" id="pad">
       <div class="leds" id="leds"><i></i><i></i><i></i></div>
       <div class="grid" id="grid"></div>
@@ -125,6 +128,9 @@ function row(s, dim) {
 function render(d) {
   document.getElementById("paddot").className = "dot" + (d.pad ? " on" : "");
   document.getElementById("padtxt").textContent = d.pad ? "pad connected" : "pad not connected (close usevia.app?)";
+  const warn = document.getElementById("warn");
+  warn.hidden = !(d.warnings && d.warnings.length);
+  warn.textContent = (d.warnings || []).join(" · ");
   const byLed = Object.fromEntries(d.keys.map(k => [k.led, k]));
   const grid = document.getElementById("grid");
   grid.innerHTML = "";

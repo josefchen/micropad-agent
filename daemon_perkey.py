@@ -222,6 +222,22 @@ _scan_beat = time.monotonic()
 WATCHDOG_S = 60.0
 
 
+_warned = set()
+
+
+def _alert_format_drift():
+    """Tell the user once when a source stops yielding sessions, so a silent
+    app-update breakage does not look like 'nothing is running'."""
+    current = set(sources.health()["warnings"])
+    for w in current - _warned:
+        print(f"source warning: {w}", flush=True)
+        if os.environ.get("MICROPAD_NOTIFY", "1") != "0":
+            script = f"display notification {json.dumps(w)} with title \"Micro Pad can't read a session source\""
+            subprocess.Popen(["osascript", "-e", script], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    _warned.clear()
+    _warned.update(current)
+
+
 def scan_loop():
     global _scan_beat
     while True:
@@ -233,6 +249,7 @@ def scan_loop():
                 _files.clear()
                 _files.update(found)
             refresh()
+            _alert_format_drift()
         except Exception as exc:
             print(f"scan loop error: {exc}", flush=True)
         time.sleep(SCAN_S)
@@ -370,7 +387,7 @@ def snapshot():
         others = [{"sid": s.sid, "family": s.family, "state": s.state, "age": int(now - s.ts),
                    "title": s.title, "workspace": s.workspace}
                   for s in recent if s.sid not in _slots][:20]
-    return {"pad": _pad_ok, "keys": keys, "others": others}
+    return {"pad": _pad_ok, "keys": keys, "others": others, "warnings": sources.health()["warnings"]}
 
 
 # --- device ----------------------------------------------------------------

@@ -20,6 +20,11 @@ from datetime import datetime
 HOME = os.path.expanduser("~")
 RECENT_S = 3 * 3600          # files untouched for longer are not looked at
 SUBAGENT_LIVE_S = 180        # a subagent that wrote this recently keeps its parent "working"
+PERMISSION_WAIT_S = 15        # unanswered tool call in a prompting mode -> waiting on you
+PROMPTING_MODES = {"default", "acceptEdits", "plan"}
+NO_PROMPT_TOOLS = {"Read", "Glob", "Grep", "LS", "TodoWrite", "Task", "Agent", "WebSearch", "Monitor"}
+CURSOR_ACTIVE_S = 600         # a Cursor checkpoint this recent with no turn end counts as running
+CURSOR_END_SLACK_S = 30       # turn_ended may land a little before the final checkpoint
 APP_TURN_LIVE_S = 600        # an open Claude.app turn with activity this recent counts as running
 WAITING_TOOLS = {"AskUserQuestion", "ExitPlanMode"}
 
@@ -100,6 +105,7 @@ def _claude_turn(d):
 
 
 def _claude_file(path):
+    """(state, ts, title, cwd, pending tool names) from the newest turn record."""
     recs = _tail_records(path, _claude_turn)
     title = next((d.get("customTitle") for d in recs if d.get("type") == "custom-title"), "")
     cwd = next((d.get("cwd") for d in recs if d.get("cwd")), "")
@@ -108,6 +114,7 @@ def _claude_file(path):
         return None
     ts = _iso(last.get("timestamp", ""))
     msg = last.get("message") or {}
+    tools = []
     if last["type"] == "system":
         state = "done"
     elif last["type"] == "assistant":
@@ -126,7 +133,7 @@ def _claude_file(path):
         if isinstance(text, list):
             text = " ".join(c.get("text", "") for c in text if isinstance(c, dict))
         state = "done" if "[Request interrupted by user" in (text or "") else "working"
-    return state, ts, title, cwd
+    return state, ts, title, cwd, tools
 
 
 def _claude_subagent_parent(path):
@@ -138,6 +145,18 @@ def _claude_subagent_parent(path):
 CLAUDE_APP_SESSIONS = os.path.join(HOME, "Library", "Application Support", "Claude", "claude-code-sessions")
 
 
+@dataclass
+class ClaudeAppSession:
+    app_id: str
+    title: str
+    archived: bool
+    activity: float
+    turn_open: bool
+    cwd: str
+    permission_mode: str
+    error_at: float
+
+
 def _claude_app_record(path):
     try:
         with open(path) as f:
@@ -145,15 +164,22 @@ def _claude_app_record(path):
     except (OSError, ValueError):
         return None
     last = d.get("lastAssistantUuid")
-    turn_open = bool(last) and d.get("postTurnSummaryFor") != last
-    return (d.get("cliSessionId"), d.get("sessionId"), d.get("title") or "", bool(d.get("isArchived")),
-            (d.get("lastActivityAt") or 0) / 1000, turn_open, d.get("cwd") or "")
+    return d.get("cliSessionId"), ClaudeAppSession(
+        app_id=d.get("sessionId") or "",
+        title=d.get("title") or "",
+        archived=bool(d.get("isArchived")),
+        activity=(d.get("lastActivityAt") or 0) / 1000,
+        turn_open=bool(last) and d.get("postTurnSummaryFor") != last,
+        cwd=d.get("cwd") or "",
+        permission_mode=d.get("permissionMode") or "",
+        error_at=(d.get("errorAt") or 0) / 1000 if d.get("error") else 0.0,
+    )
 
 
 def claude_app_index():
-    """Claude.app's own session list: transcript id -> (app session id, title, archived).
-    Its deep links only accept the app id (local_...), and its titles are the
-    ones shown in the sidebar."""
+    """Claude.app's own session list, keyed by transcript id. Its deep links
+    only accept the app id (local_...), its titles are the sidebar's, and it
+    knows when a turn is open even if the transcript mirror lags."""
     index = {}
     for path in glob.glob(os.path.join(CLAUDE_APP_SESSIONS, "*", "*", "local_*.json")):
         try:
@@ -162,7 +188,7 @@ def claude_app_index():
             continue
         rec = _cache.get(path, st, _claude_app_record)
         if rec and rec[0]:
-            index[rec[0]] = rec[1:]
+            index[rec[0]] = rec[1]
     return index
 
 
@@ -170,6 +196,7 @@ def scan_claude(now):
     out = []
     app = claude_app_index()
     sub_last = {}   # parent session id -> newest subagent record time
+    pending = {}    # session id -> tool names awaiting a result
     root = os.path.join(HOME, ".claude", "projects")
     for path in glob.glob(os.path.join(root, "*", "*.jsonl")) + glob.glob(
             os.path.join(root, "*", "*", "subagents", "*.jsonl")):
@@ -186,31 +213,45 @@ def scan_claude(now):
                 if hit:
                     sub_last[hit[0]] = max(sub_last.get(hit[0], 0.0), hit[1])
             continue
+        _health["claude"]["files"] += 1
         res = _cache.get(path, st, _claude_file)
         if res is None:
             continue
-        state, ts, title, cwd = res
+        state, ts, title, cwd, tools = res
         sid = name[:-6]
-        app_id, app_title, archived = app.get(sid, ("", "", False))[:3]
-        if archived:
+        a = app.get(sid)
+        if a and a.archived:
             continue
-        out.append(Observation("claude", sid, state, ts, app_title or title, cwd, app_id or ""))
+        pending[sid] = tools
+        out.append(Observation("claude", sid, state, ts, (a.title if a else "") or title, cwd,
+                               a.app_id if a else ""))
     for o in out:
         sub = sub_last.get(o.sid, 0.0)
         if o.state == "done" and sub > o.ts:
             o.state = "working" if now - sub <= SUBAGENT_LIVE_S else "done"
             o.ts = sub
-    # Claude.app's session record is what its sidebar "Running" reads from, and
-    # it stays current even when the local transcript mirror lags behind.
     seen = {o.sid: o for o in out}
-    for sid, (app_id, title, archived, activity, turn_open, cwd) in app.items():
-        if archived or not turn_open or now - activity > APP_TURN_LIVE_S:
+    for sid, a in app.items():
+        if a.archived:
             continue
         o = seen.get(sid)
+        if a.turn_open and now - a.activity <= APP_TURN_LIVE_S:
+            if o is None:
+                o = Observation("claude", sid, "working", a.activity, a.title, a.cwd, a.app_id)
+                out.append(o)
+                seen[sid] = o
+            elif o.state != "waiting" and a.activity > o.ts:
+                o.state, o.ts = "working", a.activity
         if o is None:
-            out.append(Observation("claude", sid, "working", activity, title, cwd, app_id))
-        elif o.state != "waiting" and activity > o.ts:
-            o.state, o.ts = "working", activity
+            continue
+        if a.error_at and a.error_at >= o.ts and now - a.error_at <= RECENT_S:
+            o.state, o.ts = "error", a.error_at
+        # Permission prompts are never written to disk. In a mode that can
+        # prompt, a tool call left unanswered this long is almost always one.
+        if (o.state == "working" and a.permission_mode in PROMPTING_MODES and pending.get(sid)
+                and not set(pending[sid]) <= NO_PROMPT_TOOLS
+                and now - max(o.ts, a.activity) >= PERMISSION_WAIT_S):
+            o.state = "waiting"
     return out
 
 
@@ -245,6 +286,7 @@ def scan_codex(now):
         con.close()
     except sqlite3.Error:
         return []
+    _health["codex"]["files"] = len(rows)
     out = []
     for tid, path, title, cwd in rows:
         try:
@@ -309,8 +351,32 @@ def _cursor_workspace(project_dir):
     return found
 
 
+CURSOR_DB = os.path.join(HOME, "Library", "Application Support", "Cursor", "User", "globalStorage", "state.vscdb")
+
+
+def cursor_headers(now):
+    """Cursor's chat list as the Agents window sees it: composer id -> header."""
+    if not os.path.exists(CURSOR_DB):
+        return {}
+    con = sqlite3.connect(f"file:{CURSOR_DB}?mode=ro", uri=True, timeout=1)
+    try:
+        rows = con.execute(
+            "SELECT composerId, value FROM composerHeaders WHERE isSubagent = 0 AND isArchived = 0 "
+            "AND MAX(lastUpdatedAt, COALESCE(checkpointAt, 0)) > ?",
+            (int((now - RECENT_S) * 1000),)).fetchall()
+    finally:
+        con.close()
+    out = {}
+    for cid, value in rows:
+        try:
+            out[cid] = json.loads(value)
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
 def scan_cursor(now):
-    out = []
+    files = {}
     for path in glob.glob(os.path.join(HOME, ".cursor", "projects", "*", "agent-transcripts", "*", "*.jsonl")):
         try:
             st = os.stat(path)
@@ -323,18 +389,61 @@ def scan_cursor(now):
             continue
         state, ts, title = _cache.get(path, st, _cursor_file)
         project = path.split(os.sep + "projects" + os.sep, 1)[1].split(os.sep, 1)[0]
-        out.append(Observation("cursor", sid, state, ts, title, _cursor_workspace(project)))
+        files[sid] = (state, ts, title, project)
+    _health["cursor"]["files"] = len(files)
+    try:
+        heads = cursor_headers(now)
+    except sqlite3.Error as exc:
+        _health["cursor"]["error"] = f"composerHeaders: {exc}"
+        heads = {}
+
+    out = []
+    for sid in set(files) | set(heads):
+        h = heads.get(sid, {})
+        state, ts, title, project = files.get(sid, ("working", 0.0, "", ""))
+        ws = ((h.get("workspaceIdentifier") or {}).get("uri") or {}).get("fsPath") or (
+            _cursor_workspace(project) if project else "")
+        activity = max(h.get("conversationCheckpointLastUpdatedAt") or 0, h.get("lastUpdatedAt") or 0) / 1000
+        if h.get("hasBlockingPendingActions"):
+            state, ts = "waiting", max(activity, ts)
+        elif sid in files and state in ("done", "error") and ts >= activity - CURSOR_END_SLACK_S:
+            pass
+        elif activity > ts and now - activity <= CURSOR_ACTIVE_S:
+            state, ts = "working", activity
+        elif sid not in files:
+            continue
+        out.append(Observation("cursor", sid, state, ts, h.get("name") or title, ws))
     return out
+
+
+_health = {}
+
+
+def health():
+    """Per-source counts from the last scan, plus a warning when a source has
+    files to read but yields nothing (an app update probably changed a format)."""
+    warnings = []
+    for name, h in _health.items():
+        if h.get("error"):
+            warnings.append(f"{name}: {h['error']}")
+        elif h.get("files", 0) > 0 and h.get("parsed", 0) == 0:
+            warnings.append(f"{name}: {h['files']} recent session files but none could be read")
+    return {"sources": _health, "warnings": warnings}
 
 
 def scan(now=None):
     now = now or time.time()
     out = []
-    for fn in (scan_claude, scan_codex, scan_cursor):
+    for name, fn in (("claude", scan_claude), ("codex", scan_codex), ("cursor", scan_cursor)):
+        _health[name] = {"files": 0, "parsed": 0, "error": ""}
         try:
-            out.extend(fn(now))
+            found = fn(now)
         except Exception as exc:
-            print(f"scan {fn.__name__} failed: {exc}", flush=True)
+            _health[name]["error"] = f"{type(exc).__name__}: {exc}"
+            print(f"scan {name} failed: {exc}", flush=True)
+            continue
+        _health[name]["parsed"] = len(found)
+        out.extend(found)
     return out
 
 
@@ -342,3 +451,4 @@ if __name__ == "__main__":
     now = time.time()
     for o in sorted(scan(now), key=lambda o: -o.ts):
         print(f"{o.family:6} {o.state:8} {int(now - o.ts):>6}s  {o.sid[:12]}  {o.title[:50]!r}  {o.workspace}")
+    print(json.dumps(health(), indent=1))
