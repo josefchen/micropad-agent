@@ -139,6 +139,39 @@ class SourcesTest(unittest.TestCase):
         warnings = self.s.health()["warnings"]
         self.assertTrue(any(w.startswith("claude:") for w in warnings), warnings)
 
+    def reply(self, ts, mid, inp, cache_read, out, text="ok"):
+        rec = self.end_turn(ts)
+        rec["message"].update(id=mid, content=[{"type": "text", "text": text}], usage={
+            "input_tokens": inp, "cache_read_input_tokens": cache_read,
+            "cache_creation_input_tokens": 0, "output_tokens": out})
+        return rec
+
+    def test_claude_tokens_count_each_message_once_and_grow_incrementally(self):
+        decoy = 'pasted log: {"usage": {"input_tokens": 999999999}}'
+        self.claude_transcript("tok", [
+            self.reply(self.now - 9, "msg_A", 10, 100, 5),
+            self.reply(self.now - 8, "msg_A", 10, 100, 5),
+            self.reply(self.now - 7, "msg_B", 20, 300, 7, text=decoy),
+        ])
+        sub = os.path.join(self.home, ".claude", "projects", "-proj", "tok", "subagents", "agent-x.jsonl")
+        self.write_jsonl(sub, [self.reply(self.now - 6, "msg_S", 1, 2, 3)])
+        o = self.by_sid()["tok"]
+        self.assertEqual((o.tokens, o.cached, o.context_used), (115 + 327 + 6, 100 + 300 + 2, 320))
+
+        path = os.path.join(self.home, ".claude", "projects", "-proj", "tok.jsonl")
+        with open(path, "a") as f:
+            f.write(json.dumps(self.reply(self.now - 1, "msg_C", 1, 400, 2)) + "\n")
+        o = self.by_sid()["tok"]
+        self.assertEqual((o.tokens, o.context_used), (115 + 327 + 6 + 403, 401))
+
+    def test_codex_usage_from_newest_token_count(self):
+        def tc(total, cached, last, window):
+            return {"type": "event_msg", "payload": {"type": "token_count", "info": {
+                "total_token_usage": {"total_tokens": total, "cached_input_tokens": cached},
+                "last_token_usage": {"input_tokens": last}, "model_context_window": window}}}
+        newest_first = [tc(900, 800, 120, 1000), tc(500, 400, 90, 1000)]
+        self.assertEqual(self.s._codex_usage(newest_first), (900, 800, 120, 1000))
+
 
 if __name__ == "__main__":
     unittest.main()

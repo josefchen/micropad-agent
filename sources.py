@@ -11,6 +11,7 @@ decided it.
 """
 import glob
 import json
+import re
 import os
 import sqlite3
 import time
@@ -38,6 +39,10 @@ class Observation:
     title: str = ""
     workspace: str = ""
     app_id: str = ""         # id the owning app's deep link expects, when it differs from sid
+    tokens: int = 0          # tokens processed so far (input incl. cache + output); 0 = unknown
+    cached: int = 0          # how many of `tokens` were cache reads
+    context_used: int = 0    # tokens in the current context window; 0 = unknown
+    context_limit: int = 0   # that window's size; 0 = unknown
 
 
 def _iso(ts):
@@ -95,6 +100,75 @@ class _Cache:
 
 
 _cache = _Cache()
+
+
+class _Usage:
+    """Running token totals for append-only JSONL transcripts. Each call parses
+    only the lines added since the last one, one line in memory at a time
+    (transcripts reach hundreds of MB), so a long session costs nothing once read."""
+
+    def __init__(self, extract):
+        self._extract = extract     # raw line -> (key, total, cached, context) or None
+        self._d = {}                # path -> [offset, {key: (total, cached)}, last context]
+
+    def get(self, path):
+        """(tokens, cached tokens, current context) for the transcript at `path`."""
+        st = self._d.setdefault(path, [0, {}, 0])
+        try:
+            with open(path, "rb") as f:
+                f.seek(st[0])
+                for raw in f:
+                    if not raw.endswith(b"\n"):
+                        break
+                    st[0] += len(raw)
+                    hit = self._extract(raw) if b'"usage"' in raw else None
+                    if hit:
+                        st[1][hit[0]] = (hit[1], hit[2])
+                        st[2] = hit[3]
+        except OSError:
+            pass
+        totals = st[1].values()
+        return sum(t for t, _ in totals), sum(c for _, c in totals), st[2]
+
+
+
+def _usage_object(raw):
+    """Decode just the `"usage": {...}` object inside a raw transcript line.
+    Lines carry multi-MB tool payloads; decoding a whole line to read one
+    small field bloats the heap for good."""
+    # Last match: usage follows the message content, where escaped copies can appear.
+    m = None
+    for m in _USAGE_KEY.finditer(raw):
+        pass
+    if m is None:
+        return None
+    try:
+        obj, _ = _decoder.raw_decode(raw[m.end() - 1:].decode("utf-8", "replace"))
+    except ValueError:
+        return None
+    return obj if isinstance(obj, dict) else None
+
+
+_decoder = json.JSONDecoder()
+_MSG_ID = re.compile(rb'"id":\s*"(msg_[A-Za-z0-9]+)"')
+_USAGE_KEY = re.compile(rb'(?<!\\)"usage":\s*\{')
+_ASSISTANT = re.compile(rb'"type":\s*"assistant"')
+
+
+def _claude_usage_record(raw):
+    # Claude writes one line per content block, all carrying the same message's usage.
+    if not _ASSISTANT.search(raw):
+        return None
+    mid = _MSG_ID.search(raw)
+    u = _usage_object(raw) if mid else None
+    if not u:
+        return None
+    cached = u.get("cache_read_input_tokens") or 0
+    context = (u.get("input_tokens") or 0) + cached + (u.get("cache_creation_input_tokens") or 0)
+    return mid.group(1), context + (u.get("output_tokens") or 0), cached, context
+
+
+_claude_usage = _Usage(_claude_usage_record)
 
 
 # --- Claude (Claude.app local + SSH sessions, Claude Code CLI) -------------
@@ -192,6 +266,9 @@ def claude_app_index():
     return index
 
 
+_claude_paths = {}   # session id -> transcript path
+
+
 def scan_claude(now):
     out = []
     app = claude_app_index()
@@ -219,6 +296,7 @@ def scan_claude(now):
             continue
         state, ts, title, cwd, tools = res
         sid = name[:-6]
+        _claude_paths[sid] = path
         a = app.get(sid)
         if a and a.archived:
             continue
@@ -226,6 +304,13 @@ def scan_claude(now):
         out.append(Observation("claude", sid, state, ts, (a.title if a else "") or title, cwd,
                                a.app_id if a else ""))
     for o in out:
+        path = _claude_paths.get(o.sid)
+        if path:
+            o.tokens, o.cached, o.context_used = _claude_usage.get(path)
+            for sub_path in glob.glob(os.path.join(path[:-6], "subagents", "*.jsonl")):
+                tokens, cached, _ = _claude_usage.get(sub_path)
+                o.tokens += tokens
+                o.cached += cached
         sub = sub_last.get(o.sid, 0.0)
         if o.state == "done" and sub > o.ts:
             o.state = "working" if now - sub <= SUBAGENT_LIVE_S else "done"
@@ -257,17 +342,29 @@ def scan_claude(now):
 
 # --- Codex desktop / CLI ---------------------------------------------------
 
+def _codex_usage(recs):
+    """(total, cached, context used, context window) from the newest token_count event."""
+    for d in recs:
+        p = d.get("payload") or {}
+        info = p.get("info") if p.get("type") == "token_count" else None
+        if info:
+            total = info.get("total_token_usage") or {}
+            last = (info.get("last_token_usage") or {}).get("input_tokens") or 0
+            return (total.get("total_tokens") or 0, total.get("cached_input_tokens") or 0,
+                    last, info.get("model_context_window") or 0)
+    return 0, 0, 0, 0
+
+
 def _codex_file(path):
     recs = _tail_records(path, lambda d: (d.get("payload") or {}).get("type") in (
         "task_started", "task_complete", "turn_aborted"))
+    usage = _codex_usage(recs)
     for d in recs:
         kind = (d.get("payload") or {}).get("type")
         if kind == "task_started":
-            return "working", _iso(d.get("timestamp", ""))
-        if kind == "task_complete":
-            return "done", _iso(d.get("timestamp", ""))
-        if kind == "turn_aborted":
-            return "done", _iso(d.get("timestamp", ""))
+            return "working", _iso(d.get("timestamp", "")), usage
+        if kind in ("task_complete", "turn_aborted"):
+            return "done", _iso(d.get("timestamp", "")), usage
     return None
 
 
@@ -295,7 +392,9 @@ def scan_codex(now):
             continue
         res = _cache.get(path, st, _codex_file)
         if res:
-            out.append(Observation("codex", tid, res[0], res[1], (title or "")[:80], cwd or ""))
+            tokens, cached, used, limit = res[2]
+            out.append(Observation("codex", tid, res[0], res[1], (title or "")[:80], cwd or "",
+                                   tokens=tokens, cached=cached, context_used=used, context_limit=limit))
     return out
 
 
@@ -413,7 +512,33 @@ def scan_cursor(now):
         elif sid not in files:
             continue
         out.append(Observation("cursor", sid, state, ts, h.get("name") or title, ws))
+    _cursor_context(out)
     return out
+
+
+_cursor_ctx = {}   # composer id -> (activity ts it was read at, used, limit)
+
+
+def _cursor_context(obs):
+    """Cursor keeps no token totals on disk, only how full each chat's context
+    window is. composerData values run to megabytes, so let SQLite pull the two
+    fields and only re-read a chat when its activity time moves."""
+    stale = [o for o in obs if _cursor_ctx.get(o.sid, (None,))[0] != o.ts]
+    if stale and os.path.exists(CURSOR_DB):
+        try:
+            con = sqlite3.connect(f"file:{CURSOR_DB}?mode=ro", uri=True, timeout=1)
+            try:
+                for o in stale:
+                    row = con.execute(
+                        "SELECT json_extract(value, '$.contextTokensUsed'), json_extract(value, '$.contextTokenLimit') "
+                        "FROM cursorDiskKV WHERE key = ?", (f"composerData:{o.sid}",)).fetchone()
+                    _cursor_ctx[o.sid] = (o.ts, int((row or [0])[0] or 0), int((row or [0, 0])[1] or 0))
+            finally:
+                con.close()
+        except sqlite3.Error as exc:
+            _health["cursor"]["error"] = f"composerData: {exc}"
+    for o in obs:
+        _, o.context_used, o.context_limit = _cursor_ctx.get(o.sid, (0, 0, 0))
 
 
 _health = {}

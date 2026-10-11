@@ -44,6 +44,7 @@ MSG_FOCUS = 0xF1
 MSG_SCROLL = 0xF2
 SEL_BIT = 0x40           # marks the wheel-selected key in a frame (keymap.c SEL_BIT)
 SWITCH_DWELL_S = 0.9     # stop turning the wheel this long and the selection opens
+SWITCH_RECENT = 6        # recent sessions (not on the pad) the wheel also walks through
 DOUBLE_TAP_S = 0.4
 
 NLED = 12
@@ -102,6 +103,10 @@ class Session:
     workspace: str = ""
     pane: str = ""
     app_id: str = ""
+    tokens: int = 0
+    cached: int = 0
+    context_used: int = 0
+    context_limit: int = 0
 
 
 _lock = threading.Lock()
@@ -115,7 +120,7 @@ _notified = {}  # sid -> (state, record ts) last announced; one alert per finish
 _seeded = False
 _pad_ok = False
 _changed = threading.Condition()   # wakes /events streams
-_switch = {"led": None, "until": 0.0}
+_switch = {"sid": None, "until": 0.0}
 
 
 def _poke():
@@ -158,7 +163,8 @@ def _merge(sid):
         best = h if h.ts > f.ts else f
         family = "cursor" if "cursor" in (f.family, h.family) else f.family
         return Session(sid, family, best.state, best.ts, f.title or h.title,
-                       h.workspace or f.workspace, h.pane, f.app_id)
+                       h.workspace or f.workspace, h.pane, f.app_id,
+                       f.tokens, f.cached, f.context_used, f.context_limit)
     s = f or h
     return Session(**asdict(s))
 
@@ -254,7 +260,9 @@ def scan_loop():
     while True:
         _scan_beat = time.monotonic()
         try:
-            found = {o.sid: Session(o.sid, o.family, o.state, o.ts, o.title, o.workspace, app_id=o.app_id)
+            found = {o.sid: Session(o.sid, o.family, o.state, o.ts, o.title, o.workspace, app_id=o.app_id,
+                                    tokens=o.tokens, cached=o.cached,
+                                    context_used=o.context_used, context_limit=o.context_limit)
                      for o in sources.scan()}
             with _lock:
                 _files.clear()
@@ -291,40 +299,47 @@ def frame():
             s = _view.get(sid)
             if s:
                 f[led] = code_for(s.family, s.state)
-        sel = _switch["led"]
+        sel = _slots.get(_switch["sid"])
         if sel is not None and f[sel] != OFF:
             f[sel] |= SEL_BIT
     return f
 
 
 # --- wheel switcher --------------------------------------------------------
-# Turning the wheel walks a selection through the lit keys (pad + Mac HUD show
-# it); when the wheel rests for SWITCH_DWELL_S the selected session opens.
+# Turning the wheel walks a selection through the lit keys, then the most recent
+# sessions that are off the pad (pad + Mac HUD show it); when the wheel rests
+# for SWITCH_DWELL_S the selected session opens.
+
+def _switch_order():
+    by_led = {led: sid for sid, led in _slots.items()}
+    live = [by_led[led] for led in LED_ORDER if led in by_led]
+    recent = sorted((s for s in _view.values() if s.sid not in _slots), key=lambda s: -s.ts)
+    return live + [s.sid for s in recent[:SWITCH_RECENT]]
+
 
 def handle_scroll(step):
     now = time.monotonic()
     with _lock:
-        used = set(_slots.values())
-        live = [led for led in LED_ORDER if led in used]
-        if not live:
+        order = _switch_order()
+        if not order:
             return
-        cur = _switch["led"]
-        if cur in live and now < _switch["until"]:
-            i = (live.index(cur) + step) % len(live)
+        cur = _switch["sid"]
+        if cur in order and now < _switch["until"]:
+            i = (order.index(cur) + step) % len(order)
         else:
-            i = 0 if step > 0 else len(live) - 1
-        _switch["led"], _switch["until"] = live[i], now + SWITCH_DWELL_S
+            i = 0 if step > 0 else len(order) - 1
+        _switch["sid"], _switch["until"] = order[i], now + SWITCH_DWELL_S
     _poke()
 
 
 def switcher_tick():
     with _lock:
-        led = _switch["led"]
-        if led is None or time.monotonic() < _switch["until"]:
+        sid = _switch["sid"]
+        if sid is None or time.monotonic() < _switch["until"]:
             return
-        _switch["led"] = None
+        _switch["sid"] = None
     _poke()
-    threading.Thread(target=handle_focus, args=(led,), daemon=True).start()
+    threading.Thread(target=open_session, args=(sid,), daemon=True).start()
 
 
 # --- opening sessions ------------------------------------------------------
@@ -416,6 +431,12 @@ def handle_focus(led):
         open_session(sid)
 
 
+def _row(s, now):
+    return {"sid": s.sid, "family": s.family, "state": s.state, "age": int(now - s.ts), "ts": s.ts,
+            "title": s.title, "workspace": s.workspace, "tokens": s.tokens, "cached": s.cached,
+            "context_used": s.context_used, "context_limit": s.context_limit}
+
+
 def snapshot():
     now = time.time()
     with _lock:
@@ -424,14 +445,10 @@ def snapshot():
         for led in LED_ORDER:
             sid = by_led.get(led)
             s = _view.get(sid) if sid else None
-            keys.append({"led": led, **({"sid": s.sid, "family": s.family, "state": s.state,
-                                          "age": int(now - s.ts), "ts": s.ts, "title": s.title,
-                                          "workspace": s.workspace} if s else {})})
+            keys.append({"led": led, **(_row(s, now) if s else {})})
         recent = sorted(_view.values(), key=lambda s: -s.ts)
-        others = [{"sid": s.sid, "family": s.family, "state": s.state, "age": int(now - s.ts),
-                   "ts": s.ts, "title": s.title, "workspace": s.workspace}
-                  for s in recent if s.sid not in _slots][:20]
-        switcher = {"led": _switch["led"]}
+        others = [_row(s, now) for s in recent if s.sid not in _slots][:20]
+        switcher = {"sid": _switch["sid"], "order": _switch_order() if _switch["sid"] else []}
     return {"pad": _pad_ok, "keys": keys, "others": others, "switcher": switcher,
             "warnings": sources.health()["warnings"]}
 
@@ -542,7 +559,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200 if sid and open_session(sid) else 404, {}); return
         if self.path == "/scroll":
             handle_scroll(1 if int(body.get("step", 1)) > 0 else -1)
-            self._json(200, {"switcher": snapshot()["switcher"]}); return
+            self._json(200, {"switcher": snapshot()["switcher"]["sid"]}); return
         if self.path == "/bootloader":
             self._json(200 if PAD.send(VAL_BOOTLOADER) else 503, {}); return
         self.send_response(404); self.end_headers()

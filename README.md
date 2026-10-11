@@ -112,8 +112,8 @@ details in
 [firmware/work_louder_micro/agent/readme.md](firmware/work_louder_micro/agent/readme.md).
 
 With Tier B the top-left wheel becomes a **session switcher** while the daemon is
-running: each notch moves a white highlight through the lit keys, and resting the
-wheel for ~0.9 s opens the highlighted session. With no daemon it is a mouse wheel
+running: each notch moves a selection through the lit keys and then the six most
+recent sessions that are off the pad, and resting the wheel for ~0.9 s opens it. With no daemon it is a mouse wheel
 again.
 
 ### Menu bar app
@@ -122,7 +122,9 @@ again.
 resident) and installs it as the `dev.micropad.menubar` LaunchAgent. It shows a
 dot per live session in the menu bar (◆ blinking = needs you, ● working,
 ○ done), a menu to open any session, and a Cmd-Tab-style panel while you turn the
-wheel. It listens to the daemon's `GET /events` stream rather than polling.
+wheel. Cards show tokens used (Claude, Codex; with the cached share) and context
+fill (Codex, Cursor; Cursor records no token totals). `Micropad --render out.png`
+draws the panel from live state for a quick look. It listens to the daemon's `GET /events` stream rather than polling.
 
 ## Optional: keymap & app routing
 

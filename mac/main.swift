@@ -13,9 +13,30 @@ struct Session: Decodable {
     let ts: Double?
     let title: String?
     let workspace: String?
+    let tokens: Int?
+    let cached: Int?
+    let contextUsed: Int?
+    let contextLimit: Int?
 }
 
-struct Switcher: Decodable { let led: Int? }
+struct Switcher: Decodable {
+    let sid: String?
+    let order: [String]?
+}
+
+func decodeSnapshot(_ data: Data) throws -> Snapshot {
+    let d = JSONDecoder()
+    d.keyDecodingStrategy = .convertFromSnakeCase
+    return try d.decode(Snapshot.self, from: data)
+}
+
+func compact(_ n: Int) -> String {
+    let v = Double(n)
+    if v >= 1e9 { return String(format: "%.1fB", v / 1e9) }
+    if v >= 1e6 { return String(format: "%.1fM", v / 1e6) }
+    if v >= 1e3 { return String(format: "%.0fk", v / 1e3) }
+    return "\(n)"
+}
 
 struct Snapshot: Decodable {
     let pad: Bool
@@ -89,6 +110,19 @@ extension Session {
         return "\(s / 3600)h"
     }
 
+    /// "7.0B tokens · 99% cached"; Cursor records no totals, so nil there.
+    var tokenLine: String? {
+        guard let tokens, tokens > 0 else { return nil }
+        let pct = Int((Double(cached ?? 0) / Double(tokens) * 100).rounded())
+        return pct > 0 ? "\(compact(tokens)) tokens · \(pct)% cached" : "\(compact(tokens)) tokens"
+    }
+
+    var contextLine: String? {
+        guard let used = contextUsed, used > 0 else { return nil }
+        guard let limit = contextLimit, limit > 0 else { return "Context \(compact(used))" }
+        return "Context \(compact(used)) of \(compact(limit)) · \(Int(Double(used) / Double(limit) * 100))%"
+    }
+
     var displayTitle: String {
         if let t = title, !t.isEmpty { return t }
         if let w = workspace, !w.isEmpty { return (w as NSString).lastPathComponent }
@@ -139,7 +173,7 @@ final class EventStream: NSObject, URLSessionDataDelegate {
             guard let text = String(data: event, encoding: .utf8) else { continue }
             for line in text.split(separator: "\n") where line.hasPrefix("data: ") {
                 do {
-                    onSnapshot(try JSONDecoder().decode(Snapshot.self, from: Data(line.dropFirst(6).utf8)))
+                    onSnapshot(try decodeSnapshot(Data(line.dropFirst(6).utf8)))
                 } catch {
                     FileHandle.standardError.write(Data("micropad: bad snapshot: \(error)\n".utf8))
                 }
@@ -179,10 +213,16 @@ final class Shape: NSView {
 }
 
 enum HUDLayout {
-    static let card = NSSize(width: 210, height: 196)
+    static let card = NSSize(width: 210, height: 236)
     static let gap: CGFloat = 14
     static let pad: CGFloat = 20
-    static let header: CGFloat = 30
+    static let header: CGFloat = 26
+    static let footer: CGFloat = 30
+    static let step = card.width + gap
+
+    static func maxCards(for screenWidth: CGFloat) -> Int {
+        max(1, Int((screenWidth - 80 - pad * 2 + gap) / step))
+    }
 }
 
 func label(_ text: String, size: CGFloat, weight: NSFont.Weight, colour: NSColor, lines: Int = 1) -> NSTextField {
@@ -196,10 +236,15 @@ func label(_ text: String, size: CGFloat, weight: NSFont.Weight, colour: NSColor
     return f
 }
 
-func switcherView(_ sessions: [Session], selected: Int?, glass: Bool) -> NSView {
-    let n = CGFloat(max(sessions.count, 1))
-    let width = HUDLayout.pad * 2 + n * HUDLayout.card.width + (n - 1) * HUDLayout.gap
-    let height = HUDLayout.pad * 2 + HUDLayout.header + HUDLayout.card.height
+/// The wheel's order: live sessions (on the pad) then recent ones. Shows a
+/// window of at most `maxCards` that keeps the selection in view.
+func switcherView(_ order: [Session], liveCount: Int, selected: String?, maxCards: Int, glass: Bool) -> NSView {
+    let sel = order.firstIndex { $0.sid == selected } ?? 0
+    let start = max(0, min(sel - maxCards / 2, order.count - maxCards))
+    let shown = Array(order.enumerated()).dropFirst(start).prefix(maxCards)
+    let n = CGFloat(max(shown.count, 1))
+    let width = HUDLayout.pad * 2 + n * HUDLayout.step - HUDLayout.gap
+    let height = HUDLayout.pad * 2 + HUDLayout.header + HUDLayout.card.height + HUDLayout.footer
     let root = Shape(frame: NSRect(x: 0, y: 0, width: width, height: height))
     root.appearance = NSAppearance(named: .darkAqua)
     root.fill = NSColor(white: 0.06, alpha: glass ? 0.55 : 0.96)
@@ -207,24 +252,33 @@ func switcherView(_ sessions: [Session], selected: Int?, glass: Bool) -> NSView 
     root.lineWidth = 1
     root.radius = 26
 
-    let hint = label("Turn the wheel to choose  ·  stop to open", size: 12, weight: .medium,
-                     colour: NSColor(white: 1, alpha: 0.45))
-    hint.frame = NSRect(x: 0, y: HUDLayout.pad - 4, width: width, height: 18)
+    let more = (start > 0 ? "‹ \(start) more   " : "") + "Turn the wheel to choose  ·  stop to open" +
+        (start + shown.count < order.count ? "   \(order.count - start - shown.count) more ›" : "")
+    let hint = label(more, size: 12, weight: .medium, colour: NSColor(white: 1, alpha: 0.45))
+    hint.frame = NSRect(x: 0, y: height - HUDLayout.pad - 18, width: width, height: 18)
     root.addSubview(hint)
 
-    for (i, s) in sessions.enumerated() {
-        let x = HUDLayout.pad + CGFloat(i) * (HUDLayout.card.width + HUDLayout.gap)
-        let c = card(s, selected: s.led == selected)
+    for (slot, (i, s)) in shown.enumerated() {
+        let x = HUDLayout.pad + CGFloat(slot) * HUDLayout.step
+        if slot == 0 || i == liveCount {
+            let heading = label(i < liveCount ? "ON THE PAD" : "RECENT", size: 11, weight: .bold,
+                                colour: NSColor(white: 1, alpha: 0.4))
+            heading.alignment = .left
+            heading.frame = NSRect(x: x + 4, y: HUDLayout.pad, width: HUDLayout.card.width, height: 16)
+            root.addSubview(heading)
+        }
+        let c = card(s, selected: s.sid == selected, recent: i >= liveCount)
         c.frame.origin = NSPoint(x: x, y: HUDLayout.pad + HUDLayout.header)
         root.addSubview(c)
     }
     return root
 }
 
-private func card(_ s: Session, selected: Bool) -> NSView {
+private func card(_ s: Session, selected: Bool, recent: Bool) -> NSView {
     let w = HUDLayout.card.width, h = HUDLayout.card.height
     let v = Shape(frame: NSRect(origin: .zero, size: HUDLayout.card))
     v.radius = 18
+    v.alphaValue = recent && !selected ? 0.6 : 1
     v.fill = selected ? s.familyColour.withAlphaComponent(0.20) : NSColor(white: 1, alpha: 0.05)
     v.stroke = s.familyColour
     v.lineWidth = selected ? 3 : 0
@@ -243,6 +297,12 @@ private func card(_ s: Session, selected: Bool) -> NSView {
     title.frame = NSRect(x: 12, y: 96, width: w - 24, height: 42)
     v.addSubview(title)
 
+    for (row, text) in [s.tokenLine, s.contextLine].compactMap({ $0 }).enumerated() {
+        let usage = label(text, size: 12, weight: .medium, colour: NSColor(white: 1, alpha: 0.6))
+        usage.frame = NSRect(x: 8, y: 148 + CGFloat(row) * 18, width: w - 16, height: 16)
+        v.addSubview(usage)
+    }
+
     let state = label("● \(s.stateLabel)  ·  \(s.age)", size: 13, weight: .semibold, colour: s.stateColour)
     state.frame = NSRect(x: 8, y: h - 34, width: w - 16, height: 18)
     v.addSubview(state)
@@ -252,11 +312,12 @@ private func card(_ s: Session, selected: Bool) -> NSView {
 final class SwitcherHUD {
     private var panel: NSPanel?
 
-    func show(_ sessions: [Session], selected: Int) {
+    func show(_ order: [Session], liveCount: Int, selected: String) {
         let panel = self.panel ?? makePanel()
-        let content = switcherView(sessions, selected: selected, glass: true)
         let screen = NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main
         let area = screen?.visibleFrame ?? .zero
+        let content = switcherView(order, liveCount: liveCount, selected: selected,
+                                   maxCards: HUDLayout.maxCards(for: area.width), glass: true)
         let size = content.frame.size
         panel.contentView = glass(around: content)
         panel.setFrame(NSRect(x: area.midX - size.width / 2, y: area.midY - size.height / 2,
@@ -311,12 +372,15 @@ final class SwitcherHUD {
 /// `Micropad --render out.png`: draw the switcher from live daemon state to a PNG.
 func renderPreview(to path: String) -> Int32 {
     guard let data = try? Data(contentsOf: daemon.appendingPathComponent("state")),
-          let snap = try? JSONDecoder().decode(Snapshot.self, from: data) else {
+          let snap = try? decodeSnapshot(data) else {
         FileHandle.standardError.write(Data("micropad: daemon not reachable\n".utf8))
         return 1
     }
     let live = snap.keys.filter { $0.sid != nil }
-    let view = switcherView(live, selected: snap.switcher?.led ?? live.first?.led, glass: false)
+    let order = live + snap.others.prefix(6)
+    let selected = CommandLine.arguments.last.flatMap { a in order.first { $0.sid?.hasPrefix(a) == true } }
+    let view = switcherView(order, liveCount: live.count, selected: (selected ?? order.first)?.sid,
+                            maxCards: HUDLayout.maxCards(for: 1920), glass: false)
     guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return 1 }
     view.cacheDisplay(in: view.bounds, to: rep)
     guard let png = rep.representation(using: .png, properties: [:]),
@@ -359,8 +423,11 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
             blinkOn = true
         }
         render()
-        if let sel = s?.switcher?.led, !live.isEmpty {
-            hud.show(live, selected: sel)
+        if let s, let sel = s.switcher?.sid {
+            let all = Dictionary((s.keys + s.others).compactMap { r in r.sid.map { ($0, r) } },
+                                 uniquingKeysWith: { a, _ in a })
+            let order = (s.switcher?.order ?? []).compactMap { all[$0] }
+            hud.show(order, liveCount: order.prefix { $0.led != nil }.count, selected: sel)
         } else {
             hud.hide()
         }
@@ -425,7 +492,8 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         mi.representedObject = s.sid
         let line = NSMutableAttributedString(string: "● ", attributes: [.foregroundColor: s.colour])
         line.append(NSAttributedString(string: s.displayTitle, attributes: [.font: NSFont.menuFont(ofSize: 0)]))
-        line.append(NSAttributedString(string: "   \(s.app) · \(s.stateLabel) · \(s.age)", attributes: [
+        let usage = s.tokenLine.map { " · " + $0.components(separatedBy: " · ")[0] } ?? ""
+        line.append(NSAttributedString(string: "   \(s.app) · \(s.stateLabel) · \(s.age)\(usage)", attributes: [
             .foregroundColor: NSColor.secondaryLabelColor, .font: NSFont.menuFont(ofSize: 11),
         ]))
         mi.attributedTitle = line
