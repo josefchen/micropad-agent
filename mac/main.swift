@@ -20,6 +20,8 @@ struct Session: Decodable {
 struct Switcher: Decodable {
     let sid: String?
     let order: [String]?
+    let mode: String?
+    let holdMs: Int?
 }
 
 func decodeSnapshot(_ data: Data) throws -> Snapshot {
@@ -233,9 +235,16 @@ func label(_ text: String, size: CGFloat, weight: NSFont.Weight, colour: NSColor
     return f
 }
 
+/// A key being held: how far through the hold it already is, and how long remains.
+struct Hold {
+    let done: Double
+    let remaining: TimeInterval
+}
+
 /// The wheel's order: live sessions (on the pad) then recent ones. Shows a
 /// window of at most `maxCards` that keeps the selection in view.
-func switcherView(_ order: [Session], liveCount: Int, selected: String?, maxCards: Int, glass: Bool) -> NSView {
+func switcherView(_ order: [Session], liveCount: Int, selected: String?, maxCards: Int, glass: Bool,
+                  hold: Hold? = nil) -> NSView {
     let sel = order.firstIndex { $0.sid == selected } ?? 0
     let start = max(0, min(sel - maxCards / 2, order.count - maxCards))
     let shown = Array(order.enumerated()).dropFirst(start).prefix(maxCards)
@@ -249,7 +258,8 @@ func switcherView(_ order: [Session], liveCount: Int, selected: String?, maxCard
     root.lineWidth = 1
     root.radius = 26
 
-    let more = (start > 0 ? "‹ \(start) more   " : "") + "Turn the wheel to choose  ·  stop to open" +
+    let action = hold == nil ? "Turn the wheel to choose  ·  stop to open" : "Keep holding to open  ·  let go to cancel"
+    let more = (start > 0 ? "‹ \(start) more   " : "") + action +
         (start + shown.count < order.count ? "   \(order.count - start - shown.count) more ›" : "")
     let hint = label(more, size: 12, weight: .medium, colour: NSColor(white: 1, alpha: 0.45))
     hint.frame = NSRect(x: 0, y: height - HUDLayout.pad - 18, width: width, height: 18)
@@ -264,14 +274,15 @@ func switcherView(_ order: [Session], liveCount: Int, selected: String?, maxCard
             heading.frame = NSRect(x: x + 4, y: HUDLayout.pad, width: HUDLayout.card.width, height: 16)
             root.addSubview(heading)
         }
-        let c = card(s, selected: s.sid == selected, recent: i >= liveCount)
+        let c = card(s, selected: s.sid == selected, recent: i >= liveCount,
+                     hold: s.sid == selected ? hold : nil)
         c.frame.origin = NSPoint(x: x, y: HUDLayout.pad + HUDLayout.header)
         root.addSubview(c)
     }
     return root
 }
 
-private func card(_ s: Session, selected: Bool, recent: Bool) -> NSView {
+private func card(_ s: Session, selected: Bool, recent: Bool, hold: Hold?) -> NSView {
     let w = HUDLayout.card.width, h = HUDLayout.card.height
     let v = Shape(frame: NSRect(origin: .zero, size: HUDLayout.card))
     v.radius = 18
@@ -303,21 +314,50 @@ private func card(_ s: Session, selected: Bool, recent: Bool) -> NSView {
     detail.frame = NSRect(x: 8, y: 167, width: w - 16, height: 15)
     v.addSubview(detail)
 
+    if let hold {
+        v.addSubview(holdBar(frame: NSRect(x: 18, y: h - 12, width: w - 36, height: 4),
+                             colour: s.familyColour, hold: hold))
+    }
+
     let state = label("● \(s.stateLabel)  ·  \(s.age)", size: 13, weight: .semibold, colour: s.stateColour)
     state.frame = NSRect(x: 8, y: h - 34, width: w - 16, height: 18)
     v.addSubview(state)
     return v
 }
 
+/// Fills left to right over the rest of the hold; Core Animation runs it, the app does no per-frame work.
+private func holdBar(frame: NSRect, colour: NSColor, hold: Hold) -> NSView {
+    let track = NSView(frame: frame)
+    track.wantsLayer = true
+    track.layer?.backgroundColor = NSColor(white: 1, alpha: 0.12).cgColor
+    track.layer?.cornerRadius = frame.height / 2
+    track.layer?.masksToBounds = true
+    let fill = CALayer()
+    fill.backgroundColor = colour.cgColor
+    fill.anchorPoint = CGPoint(x: 0, y: 0.5)
+    fill.frame = CGRect(origin: .zero, size: frame.size)
+    track.layer?.addSublayer(fill)
+    guard hold.remaining > 0 else {
+        fill.transform = CATransform3DMakeScale(hold.done, 1, 1)
+        return track
+    }
+    let grow = CABasicAnimation(keyPath: "transform.scale.x")
+    grow.fromValue = hold.done
+    grow.toValue = 1
+    grow.duration = max(hold.remaining, 0.01)
+    fill.add(grow, forKey: "hold")
+    return track
+}
+
 final class SwitcherHUD {
     private var panel: NSPanel?
 
-    func show(_ order: [Session], liveCount: Int, selected: String) {
+    func show(_ order: [Session], liveCount: Int, selected: String, hold: Hold?) {
         let panel = self.panel ?? makePanel()
         let screen = NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main
         let area = screen?.visibleFrame ?? .zero
         let content = switcherView(order, liveCount: liveCount, selected: selected,
-                                   maxCards: HUDLayout.maxCards(for: area.width), glass: true)
+                                   maxCards: HUDLayout.maxCards(for: area.width), glass: true, hold: hold)
         let size = content.frame.size
         panel.contentView = glass(around: content)
         panel.setFrame(NSRect(x: area.midX - size.width / 2, y: area.midY - size.height / 2,
@@ -369,7 +409,8 @@ final class SwitcherHUD {
     }
 }
 
-/// `Micropad --render out.png`: draw the switcher from live daemon state to a PNG.
+/// `Micropad --render out.png [--hold 0.6] [sid-prefix]`: draw the switcher from live
+/// daemon state to a PNG, optionally frozen part-way through a key hold.
 func renderPreview(to path: String) -> Int32 {
     guard let data = try? Data(contentsOf: daemon.appendingPathComponent("state")),
           let snap = try? decodeSnapshot(data) else {
@@ -379,8 +420,11 @@ func renderPreview(to path: String) -> Int32 {
     let live = snap.keys.filter { $0.sid != nil }
     let order = live + snap.others.prefix(6)
     let selected = CommandLine.arguments.last.flatMap { a in order.first { $0.sid?.hasPrefix(a) == true } }
+    let frozen = CommandLine.arguments.firstIndex(of: "--hold").map { i in
+        Hold(done: Double(CommandLine.arguments[i + 1]) ?? 0.5, remaining: 0)
+    }
     let view = switcherView(order, liveCount: live.count, selected: (selected ?? order.first)?.sid,
-                            maxCards: HUDLayout.maxCards(for: 1920), glass: false)
+                            maxCards: HUDLayout.maxCards(for: 1920), glass: false, hold: frozen)
     guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return 1 }
     view.cacheDisplay(in: view.bounds, to: rep)
     guard let png = rep.representation(using: .png, properties: [:]),
@@ -397,6 +441,18 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var snap: Snapshot?
     private var blink: Timer?
     private var blinkOn = true
+    private var holdStart: (sid: String, at: Date)?
+
+    private func hold(for sw: Switcher?) -> Hold? {
+        guard let sw, sw.mode == "hold", let sid = sw.sid else {
+            holdStart = nil
+            return nil
+        }
+        if holdStart?.sid != sid { holdStart = (sid, Date()) }
+        let total = Double(sw.holdMs ?? 1000) / 1000
+        let elapsed = min(Date().timeIntervalSince(holdStart!.at), total)
+        return Hold(done: elapsed / total, remaining: total - elapsed)
+    }
 
     func applicationDidFinishLaunching(_ n: Notification) {
         let menu = NSMenu()
@@ -427,8 +483,9 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let all = Dictionary((s.keys + s.others).compactMap { r in r.sid.map { ($0, r) } },
                                  uniquingKeysWith: { a, _ in a })
             let order = (s.switcher?.order ?? []).compactMap { all[$0] }
-            hud.show(order, liveCount: order.prefix { $0.led != nil }.count, selected: sel)
+            hud.show(order, liveCount: order.prefix { $0.led != nil }.count, selected: sel, hold: hold(for: s.switcher))
         } else {
+            holdStart = nil
             hud.hide()
         }
     }

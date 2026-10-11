@@ -40,7 +40,9 @@ RAW_USAGE_PAGE, RAW_USAGE = 0xFF60, 0x61
 
 ID_CUSTOM_SET_VALUE = 0x07
 CH_AGENT, VAL_FRAME, VAL_BOOTLOADER = 0x30, 0x01, 0x02
-MSG_FOCUS = 0xF1
+MSG_FOCUS = 0xF1        # a lit key went down
+MSG_RELEASE = 0xF3      # ...and came back up
+HOLD_S = 1.0            # hold a key this long to open its session; letting go sooner cancels
 MSG_SCROLL = 0xF2
 SEL_BIT = 0x40           # marks the wheel-selected key in a frame (keymap.c SEL_BIT)
 SWITCH_DWELL_S = 0.9     # stop turning the wheel this long and the selection opens
@@ -118,7 +120,7 @@ _notified = {}  # sid -> (state, record ts) last announced; one alert per finish
 _seeded = False
 _pad_ok = False
 _changed = threading.Condition()   # wakes /events streams
-_switch = {"sid": None, "until": 0.0}
+_switch = {"sid": None, "until": 0.0, "mode": "wheel"}   # mode: wheel | hold
 
 
 def _poke():
@@ -325,7 +327,25 @@ def handle_scroll(step):
             i = (order.index(cur) + step) % len(order)
         else:
             i = 0 if step > 0 else len(order) - 1
-        _switch["sid"], _switch["until"] = order[i], now + SWITCH_DWELL_S
+        _switch.update(sid=order[i], until=now + SWITCH_DWELL_S, mode="wheel")
+    _poke()
+
+
+def handle_press(led):
+    """Preview the key's session (pad + Mac HUD); it opens only if held for HOLD_S."""
+    with _lock:
+        sid = next((k for k, v in _slots.items() if v == led), None)
+        if sid is None:
+            return
+        _switch.update(sid=sid, until=time.monotonic() + HOLD_S, mode="hold")
+    _poke()
+
+
+def handle_release(led):
+    with _lock:
+        if _switch["mode"] != "hold" or _slots.get(_switch["sid"]) != led:
+            return
+        _switch["sid"] = None
     _poke()
 
 
@@ -421,13 +441,6 @@ def open_session(sid):
     return True
 
 
-def handle_focus(led):
-    with _lock:
-        sid = next((k for k, v in _slots.items() if v == led), None)
-    if sid:
-        open_session(sid)
-
-
 def _row(s, now):
     return {"sid": s.sid, "family": s.family, "state": s.state, "age": int(now - s.ts), "ts": s.ts,
             "title": s.title, "workspace": s.workspace, "tokens": s.tokens, "cached": s.cached}
@@ -444,7 +457,8 @@ def snapshot():
             keys.append({"led": led, **(_row(s, now) if s else {})})
         recent = sorted(_view.values(), key=lambda s: -s.ts)
         others = [_row(s, now) for s in recent if s.sid not in _slots][:20]
-        switcher = {"sid": _switch["sid"], "order": _switch_order() if _switch["sid"] else []}
+        switcher = {"sid": _switch["sid"], "order": _switch_order() if _switch["sid"] else [],
+                    "mode": _switch["mode"], "hold_ms": int(HOLD_S * 1000)}
     return {"pad": _pad_ok, "keys": keys, "others": others, "switcher": switcher,
             "warnings": sources.health()["warnings"]}
 
@@ -625,7 +639,9 @@ def main():
             PAD.show(frame())
             ev = PAD.read(60)
             if ev and len(ev) >= 2 and ev[0] == MSG_FOCUS:
-                threading.Thread(target=handle_focus, args=(ev[1],), daemon=True).start()
+                handle_press(ev[1])
+            elif ev and len(ev) >= 2 and ev[0] == MSG_RELEASE:
+                handle_release(ev[1])
             elif ev and len(ev) >= 2 and ev[0] == MSG_SCROLL:
                 handle_scroll(1 if ev[1] == 1 else -1)
         except Exception as exc:

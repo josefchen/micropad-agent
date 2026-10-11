@@ -92,6 +92,7 @@ static uint32_t last_rx;       // timer of last host frame
 
 #define VAL_BOOTLOADER 0x02    // host -> pad: reboot into DFU for a hands-free reflash
 #define MSG_FOCUS      0xF1    // pad -> host: a lit session key was pressed
+#define MSG_RELEASE    0xF3    // pad -> host: that key was let go (host times the hold)
 #define MSG_SCROLL     0xF2    // pad -> host: wheel turned, +1 / -1
 
 static int8_t key_led_index(uint8_t r, uint8_t c) {
@@ -113,9 +114,9 @@ static bool key_has_session(int8_t led) {
     return led >= 0 && host_alive() && st[led] != ST_OFF && base_state(st[led]) != ST_IDLE;
 }
 
-static void send_focus(uint8_t led) {
+static void send_key_event(uint8_t msg, uint8_t led) {
     uint8_t buf[32] = {0};
-    buf[0] = MSG_FOCUS;
+    buf[0] = msg;
     buf[1] = led;
     raw_hid_send(buf, sizeof(buf));
 }
@@ -332,7 +333,7 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
     uint16_t bit = (uint16_t)1 << led;
     if (record->event.pressed) {
         if (key_has_session(led)) {
-            send_focus((uint8_t)led);
+            send_key_event(MSG_FOCUS, (uint8_t)led);
             swallowed |= bit;
             return false;
         }
@@ -340,6 +341,7 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
     }
     if (swallowed & bit) {
         swallowed &= ~bit;
+        send_key_event(MSG_RELEASE, (uint8_t)led);
         return false;
     }
     return true;
