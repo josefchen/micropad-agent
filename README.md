@@ -17,6 +17,15 @@ from each app's own files, including remote Claude sessions), hold-a-key to
 open a session, the scroll wheel as a session switcher, per-session token
 counts, and a native macOS menu bar app (`mac/`).
 
+<p align="center">
+  <img src="docs/media/switcher.png" width="420" alt="Wheel switcher: sessions laid out on their keys">
+  &nbsp;
+  <img src="docs/media/hold-to-open.png" width="420" alt="Hold a key to open its session">
+</p>
+
+`./demo.sh showcase|working|needs|done|off` stages the pad and the app with
+sample sessions for photos and recordings.
+
 ## What you see
 
 Colour encodes **state** (Codex-Micro style); only the working states keep the

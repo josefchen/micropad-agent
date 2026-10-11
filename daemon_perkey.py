@@ -25,7 +25,7 @@ import subprocess
 import threading
 import time
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import hid
@@ -177,10 +177,74 @@ def _visible(s, now):
     return True
 
 
+# --- demo scenes -----------------------------------------------------------
+# Staged sessions for photos and screen recordings: they replace the real view
+# until "off", never notify, never persist, and pressing their keys opens nothing.
+
+DEMO_TITLES = {
+    "claude": ["Refactor auth middleware", "Write the release notes", "Fix flaky CI test"],
+    "codex": ["Migrate billing schema", "Port parser to Rust"],
+    "cursor": ["Polish onboarding flow", "Add dark mode"],
+}
+DEMO_SCENES = {
+    # (family, state, tokens) per key, filled bottom-up like real sessions
+    "showcase": [("claude", "working", 412_000_000), ("codex", "working", 38_400_000),
+                 ("cursor", "working", 0), ("claude", "waiting", 96_000_000),
+                 ("codex", "done", 12_900_000), ("claude", "done", 1_240_000_000),
+                 ("cursor", "working", 0)],
+    "working": [("claude", "working", 412_000_000), ("codex", "working", 38_400_000),
+                ("cursor", "working", 0), ("claude", "working", 96_000_000),
+                ("codex", "working", 12_900_000), ("cursor", "working", 0)],
+    "needs": [("claude", "working", 412_000_000), ("codex", "working", 38_400_000),
+              ("claude", "waiting", 96_000_000), ("cursor", "working", 0)],
+    "done": [("claude", "working", 412_000_000), ("codex", "done", 38_400_000),
+             ("cursor", "working", 0), ("claude", "working", 96_000_000)],
+}
+_demo = None   # sid -> Session while a scene is up
+
+
+def set_demo(scene):
+    """Show a staged scene ("off" returns to real sessions). Returns False for unknown names."""
+    global _demo
+    if scene == "off":
+        _demo = None
+    elif scene in DEMO_SCENES:
+        now, used = time.time(), {f: 0 for f in DEMO_TITLES}
+        sessions = {}
+        for i, (family, state, tokens) in enumerate(DEMO_SCENES[scene]):
+            title = DEMO_TITLES[family][used[family] % len(DEMO_TITLES[family])]
+            used[family] += 1
+            sid = f"demo-{i}"
+            sessions[sid] = Session(sid, family, state, now - 40 - i * 95, title, tokens=tokens,
+                                    cached=int(tokens * 0.97))
+        # The pad flashes a key when it turns done, so pass through "working" first.
+        _demo = {sid: replace(x, state="working") for sid, x in sessions.items()}
+        refresh()
+        time.sleep(0.6)
+        _demo = sessions
+    else:
+        return False
+    refresh()
+    return True
+
+
+def _refresh_demo():
+    with _lock:
+        _slots.clear()
+        for led, sid in zip(LED_ORDER, _demo):
+            _slots[sid] = led
+        _view.clear()
+        _view.update(_demo)
+    _poke()
+
+
 def refresh():
     """Rebuild the merged view, keep every visible session on the key it already
     had, and hand free keys to newcomers by urgency."""
     global _seeded
+    if _demo is not None:
+        _refresh_demo()
+        return
     now = time.time()
     with _lock:
         merged = {sid: _merge(sid) for sid in set(_files) | set(_hooks)}
@@ -417,6 +481,8 @@ def _cmux_rpc(method, params, timeout=1.5):
 
 
 def open_session(sid):
+    if _demo is not None:
+        return sid in _demo
     with _lock:
         s = _view.get(sid)
         if s is None:
@@ -553,7 +619,7 @@ class Handler(BaseHTTPRequestHandler):
             body = self._body()
         except ValueError:
             self.send_response(400); self.end_headers(); return
-        if self.path in ("/open", "/bootloader", "/scroll") and self.headers.get("X-Micropad") != "1":
+        if self.path in ("/open", "/bootloader", "/scroll", "/demo") and self.headers.get("X-Micropad") != "1":
             self.send_response(403); self.end_headers(); return
         if self.path == "/state":
             source = body.get("source", "claude-code")
@@ -567,6 +633,9 @@ class Handler(BaseHTTPRequestHandler):
                 with _lock:
                     sid = next((k for k, v in _slots.items() if v == int(body["led"])), None)
             self._json(200 if sid and open_session(sid) else 404, {}); return
+        if self.path == "/demo":
+            ok = set_demo(str(body.get("scene", "off")))
+            self._json(200 if ok else 404, {"scenes": ["off", *DEMO_SCENES]}); return
         if self.path == "/scroll":
             handle_scroll(1 if int(body.get("step", 1)) > 0 else -1)
             self._json(200, {"switcher": snapshot()["switcher"]["sid"]}); return
