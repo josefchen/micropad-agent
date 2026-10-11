@@ -34,25 +34,49 @@ extension Session {
         }
     }
 
-    var colour: NSColor {
-        switch state {
-        case "done": return NSColor(srgbRed: 0.30, green: 0.85, blue: 0.45, alpha: 1)
-        case "error": return NSColor(srgbRed: 1.0, green: 0.27, blue: 0.27, alpha: 1)
-        default: break
-        }
+    var familyColour: NSColor {
         switch family {
-        case "codex": return NSColor(srgbRed: 0.30, green: 0.55, blue: 1.0, alpha: 1)
-        case "cursor": return NSColor(srgbRed: 0.65, green: 0.40, blue: 1.0, alpha: 1)
-        default: return NSColor(srgbRed: 1.0, green: 0.68, blue: 0.20, alpha: 1)
+        case "codex": return NSColor(srgbRed: 0.36, green: 0.60, blue: 1.0, alpha: 1)
+        case "cursor": return NSColor(srgbRed: 0.70, green: 0.48, blue: 1.0, alpha: 1)
+        default: return NSColor(srgbRed: 1.0, green: 0.66, blue: 0.24, alpha: 1)
         }
+    }
+
+    var stateColour: NSColor {
+        switch state {
+        case "waiting": return NSColor(srgbRed: 1.0, green: 0.58, blue: 0.20, alpha: 1)
+        case "done": return NSColor(srgbRed: 0.34, green: 0.86, blue: 0.48, alpha: 1)
+        case "error": return NSColor(srgbRed: 1.0, green: 0.36, blue: 0.36, alpha: 1)
+        default: return NSColor(white: 1, alpha: 0.65)
+        }
+    }
+
+    /// Menu bar dot: green/red once finished, otherwise the app colour.
+    var colour: NSColor {
+        state == "done" || state == "error" ? stateColour : familyColour
+    }
+
+    var appIcon: NSImage? {
+        let ids: [String]
+        switch family {
+        case "codex": ids = ["com.openai.codex", "com.openai.chat"]
+        case "cursor": ids = ["com.todesktop.230313mzl4w4u92"]
+        default: ids = ["com.anthropic.claudefordesktop"]
+        }
+        for id in ids {
+            if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id) {
+                return NSWorkspace.shared.icon(forFile: url.path)
+            }
+        }
+        return nil
     }
 
     var stateLabel: String {
         switch state {
-        case "waiting": return "needs you"
-        case "working": return "working"
-        case "done": return "done"
-        case "error": return "error"
+        case "waiting": return "Needs you"
+        case "working": return "Working"
+        case "done": return "Done"
+        case "error": return "Error"
         default: return state ?? ""
         }
     }
@@ -130,21 +154,113 @@ final class EventStream: NSObject, URLSessionDataDelegate {
 }
 
 // MARK: - switcher HUD
+// Dark glass: the blur is composited by the WindowServer, so it costs the app
+// nothing; a dark tint keeps text readable over any wallpaper and in light mode.
+// `--render` has no window to blur, so it draws the tint opaque.
+
+final class Shape: NSView {
+    var fill: NSColor = .clear
+    var stroke: NSColor = .clear
+    var lineWidth: CGFloat = 0
+    var radius: CGFloat = 0
+    override var isFlipped: Bool { true }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let inset = lineWidth / 2
+        let path = NSBezierPath(roundedRect: bounds.insetBy(dx: inset, dy: inset), xRadius: radius, yRadius: radius)
+        fill.setFill()
+        path.fill()
+        if lineWidth > 0 {
+            stroke.setStroke()
+            path.lineWidth = lineWidth
+            path.stroke()
+        }
+    }
+}
+
+enum HUDLayout {
+    static let card = NSSize(width: 210, height: 196)
+    static let gap: CGFloat = 14
+    static let pad: CGFloat = 20
+    static let header: CGFloat = 30
+}
+
+func label(_ text: String, size: CGFloat, weight: NSFont.Weight, colour: NSColor, lines: Int = 1) -> NSTextField {
+    let f = lines > 1 ? NSTextField(wrappingLabelWithString: text) : NSTextField(labelWithString: text)
+    f.font = .systemFont(ofSize: size, weight: weight)
+    f.textColor = colour
+    f.alignment = .center
+    f.maximumNumberOfLines = lines
+    f.lineBreakMode = lines > 1 ? .byWordWrapping : .byTruncatingTail
+    f.cell?.truncatesLastVisibleLine = true
+    return f
+}
+
+func switcherView(_ sessions: [Session], selected: Int?, glass: Bool) -> NSView {
+    let n = CGFloat(max(sessions.count, 1))
+    let width = HUDLayout.pad * 2 + n * HUDLayout.card.width + (n - 1) * HUDLayout.gap
+    let height = HUDLayout.pad * 2 + HUDLayout.header + HUDLayout.card.height
+    let root = Shape(frame: NSRect(x: 0, y: 0, width: width, height: height))
+    root.appearance = NSAppearance(named: .darkAqua)
+    root.fill = NSColor(white: 0.06, alpha: glass ? 0.55 : 0.96)
+    root.stroke = NSColor(white: 1, alpha: 0.10)
+    root.lineWidth = 1
+    root.radius = 26
+
+    let hint = label("Turn the wheel to choose  ·  stop to open", size: 12, weight: .medium,
+                     colour: NSColor(white: 1, alpha: 0.45))
+    hint.frame = NSRect(x: 0, y: HUDLayout.pad - 4, width: width, height: 18)
+    root.addSubview(hint)
+
+    for (i, s) in sessions.enumerated() {
+        let x = HUDLayout.pad + CGFloat(i) * (HUDLayout.card.width + HUDLayout.gap)
+        let c = card(s, selected: s.led == selected)
+        c.frame.origin = NSPoint(x: x, y: HUDLayout.pad + HUDLayout.header)
+        root.addSubview(c)
+    }
+    return root
+}
+
+private func card(_ s: Session, selected: Bool) -> NSView {
+    let w = HUDLayout.card.width, h = HUDLayout.card.height
+    let v = Shape(frame: NSRect(origin: .zero, size: HUDLayout.card))
+    v.radius = 18
+    v.fill = selected ? s.familyColour.withAlphaComponent(0.20) : NSColor(white: 1, alpha: 0.05)
+    v.stroke = s.familyColour
+    v.lineWidth = selected ? 3 : 0
+
+    let icon = NSImageView(frame: NSRect(x: (w - 52) / 2, y: 16, width: 52, height: 52))
+    icon.image = s.appIcon
+    icon.imageScaling = .scaleProportionallyUpOrDown
+    v.addSubview(icon)
+
+    let app = label(s.app.uppercased(), size: 12, weight: .bold, colour: s.familyColour)
+    app.frame = NSRect(x: 8, y: 74, width: w - 16, height: 16)
+    v.addSubview(app)
+
+    let title = label(s.displayTitle, size: 15, weight: .semibold,
+                      colour: NSColor(white: 1, alpha: selected ? 1 : 0.85), lines: 2)
+    title.frame = NSRect(x: 12, y: 96, width: w - 24, height: 42)
+    v.addSubview(title)
+
+    let state = label("● \(s.stateLabel)  ·  \(s.age)", size: 13, weight: .semibold, colour: s.stateColour)
+    state.frame = NSRect(x: 8, y: h - 34, width: w - 16, height: 18)
+    v.addSubview(state)
+    return v
+}
 
 final class SwitcherHUD {
     private var panel: NSPanel?
-    private let stack = NSStackView()
 
     func show(_ sessions: [Session], selected: Int) {
         let panel = self.panel ?? makePanel()
-        stack.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        for s in sessions { stack.addArrangedSubview(card(s, selected: s.led == selected)) }
-        let size = stack.fittingSize
-        let frame = NSRect(x: 0, y: 0, width: size.width + 32, height: size.height + 32)
+        let content = switcherView(sessions, selected: selected, glass: true)
         let screen = NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main
         let area = screen?.visibleFrame ?? .zero
-        panel.setFrame(NSRect(x: area.midX - frame.width / 2, y: area.midY - frame.height / 2,
-                              width: frame.width, height: frame.height), display: true)
+        let size = content.frame.size
+        panel.contentView = glass(around: content)
+        panel.setFrame(NSRect(x: area.midX - size.width / 2, y: area.midY - size.height / 2,
+                              width: size.width, height: size.height), display: true)
         panel.alphaValue = 1
         panel.orderFrontRegardless()
     }
@@ -157,6 +273,25 @@ final class SwitcherHUD {
         }, completionHandler: { panel.orderOut(nil) })
     }
 
+    private func glass(around content: NSView) -> NSView {
+        content.autoresizingMask = [.width, .height]
+        if #available(macOS 26.0, *) {
+            let g = NSGlassEffectView(frame: content.frame)
+            g.cornerRadius = 26
+            g.contentView = content
+            return g
+        }
+        let v = NSVisualEffectView(frame: content.frame)
+        v.material = .hudWindow
+        v.blendingMode = .behindWindow
+        v.state = .active
+        v.wantsLayer = true
+        v.layer?.cornerRadius = 26
+        v.layer?.masksToBounds = true
+        v.addSubview(content)
+        return v
+    }
+
     private func makePanel() -> NSPanel {
         let p = NSPanel(contentRect: .zero, styleMask: [.nonactivatingPanel, .borderless],
                         backing: .buffered, defer: true)
@@ -167,72 +302,26 @@ final class SwitcherHUD {
         p.ignoresMouseEvents = true
         p.isReleasedWhenClosed = false
         p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
-
-        let blur = NSVisualEffectView()
-        blur.material = .hudWindow
-        blur.state = .active
-        blur.blendingMode = .behindWindow
-        blur.wantsLayer = true
-        blur.layer?.cornerRadius = 20
-        blur.layer?.masksToBounds = true
-
-        stack.orientation = .horizontal
-        stack.spacing = 12
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        blur.addSubview(stack)
-        NSLayoutConstraint.activate([
-            stack.centerXAnchor.constraint(equalTo: blur.centerXAnchor),
-            stack.centerYAnchor.constraint(equalTo: blur.centerYAnchor),
-        ])
-        p.contentView = blur
+        p.appearance = NSAppearance(named: .darkAqua)
         panel = p
         return p
     }
+}
 
-    private func card(_ s: Session, selected: Bool) -> NSView {
-        let v = NSView()
-        v.wantsLayer = true
-        v.layer?.cornerRadius = 14
-        v.layer?.backgroundColor = NSColor.white.withAlphaComponent(selected ? 0.18 : 0.05).cgColor
-        v.layer?.borderWidth = selected ? 2 : 0
-        v.layer?.borderColor = s.colour.cgColor
-
-        let dot = NSView()
-        dot.wantsLayer = true
-        dot.layer?.cornerRadius = 9
-        dot.layer?.backgroundColor = s.colour.cgColor
-
-        let title = NSTextField(wrappingLabelWithString: s.displayTitle)
-        title.font = .systemFont(ofSize: 14, weight: selected ? .semibold : .regular)
-        title.textColor = .white
-        title.maximumNumberOfLines = 2
-        title.lineBreakMode = .byTruncatingTail
-        title.alignment = .center
-
-        let sub = NSTextField(labelWithString: "\(s.app) · \(s.stateLabel) · \(s.age)")
-        sub.font = .systemFont(ofSize: 11)
-        sub.textColor = NSColor.white.withAlphaComponent(0.6)
-        sub.alignment = .center
-
-        for x in [dot, title, sub] as [NSView] {
-            x.translatesAutoresizingMaskIntoConstraints = false
-            v.addSubview(x)
-        }
-        NSLayoutConstraint.activate([
-            v.widthAnchor.constraint(equalToConstant: 168),
-            v.heightAnchor.constraint(equalToConstant: 120),
-            dot.widthAnchor.constraint(equalToConstant: 18),
-            dot.heightAnchor.constraint(equalToConstant: 18),
-            dot.centerXAnchor.constraint(equalTo: v.centerXAnchor),
-            dot.topAnchor.constraint(equalTo: v.topAnchor, constant: 16),
-            title.topAnchor.constraint(equalTo: dot.bottomAnchor, constant: 10),
-            title.leadingAnchor.constraint(equalTo: v.leadingAnchor, constant: 10),
-            title.trailingAnchor.constraint(equalTo: v.trailingAnchor, constant: -10),
-            sub.bottomAnchor.constraint(equalTo: v.bottomAnchor, constant: -12),
-            sub.centerXAnchor.constraint(equalTo: v.centerXAnchor),
-        ])
-        return v
+/// `Micropad --render out.png`: draw the switcher from live daemon state to a PNG.
+func renderPreview(to path: String) -> Int32 {
+    guard let data = try? Data(contentsOf: daemon.appendingPathComponent("state")),
+          let snap = try? JSONDecoder().decode(Snapshot.self, from: data) else {
+        FileHandle.standardError.write(Data("micropad: daemon not reachable\n".utf8))
+        return 1
     }
+    let live = snap.keys.filter { $0.sid != nil }
+    let view = switcherView(live, selected: snap.switcher?.led ?? live.first?.led, glass: false)
+    guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return 1 }
+    view.cacheDisplay(in: view.bounds, to: rep)
+    guard let png = rep.representation(using: .png, properties: [:]),
+          (try? png.write(to: URL(fileURLWithPath: path))) != nil else { return 1 }
+    return 0
 }
 
 // MARK: - menu bar
@@ -350,6 +439,11 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func openDashboard() {
         NSWorkspace.shared.open(daemon)
     }
+}
+
+if let i = CommandLine.arguments.firstIndex(of: "--render"), i + 1 < CommandLine.arguments.count {
+    _ = NSApplication.shared
+    exit(renderPreview(to: CommandLine.arguments[i + 1]))
 }
 
 let app = NSApplication.shared
