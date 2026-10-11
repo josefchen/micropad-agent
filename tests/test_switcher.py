@@ -50,5 +50,29 @@ class HoldToOpenTest(unittest.TestCase):
         self.assertIsNone(d._switch["sid"])
 
 
+class DemoOpenTest(unittest.TestCase):
+    def setUp(self):
+        self.calls = []
+        self._hook, self._links = d._run_hook, d.DEMO_LINKS
+        d._run_hook = lambda name, args: self.calls.append(args)
+        d._demo = {"demo-0": d.Session("demo-0", "claude", "working", time.time())}
+
+    def tearDown(self):
+        d._run_hook, d.DEMO_LINKS, d._demo = self._hook, self._links, None
+
+    def test_demo_key_opens_its_app_without_a_link(self):
+        d.DEMO_LINKS = "/nonexistent/demo.json"
+        self.assertTrue(d.open_session("demo-0"))
+        self.assertEqual(self.calls, [["focus", "", "", "claude", "", ""]])
+
+    def test_demo_key_opens_the_linked_session(self):
+        import json, tempfile
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+            json.dump({"claude": "local_staged"}, f)
+        d.DEMO_LINKS = f.name
+        d.open_session("demo-0")
+        self.assertEqual(self.calls[0][2:4], ["local_staged", "claude"])
+
+
 if __name__ == "__main__":
     unittest.main()

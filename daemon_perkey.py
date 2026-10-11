@@ -480,9 +480,28 @@ def _cmux_rpc(method, params, timeout=1.5):
         s.close()
 
 
+DEMO_LINKS = os.path.expanduser("~/.config/micropad/demo.json")
+
+
+def _open_demo(sid):
+    """A demo key opens its app, or the real session named for that app in
+    DEMO_LINKS ({"claude": "local_…", "codex": "<thread id>", "cursor": "<composer id>"}),
+    so recordings can end on a clean, staged conversation."""
+    s = _demo.get(sid)
+    if s is None:
+        return False
+    try:
+        with open(DEMO_LINKS) as f:
+            target = str(json.load(f).get(s.family) or "")
+    except (OSError, ValueError, AttributeError):
+        target = ""
+    _run_hook("focus_session.sh", ["focus", "", target, s.family, "", ""])
+    return True
+
+
 def open_session(sid):
     if _demo is not None:
-        return sid in _demo
+        return _open_demo(sid)
     with _lock:
         s = _view.get(sid)
         if s is None:
