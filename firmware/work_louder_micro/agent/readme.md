@@ -29,7 +29,7 @@ qmk flash   -kb work_louder/micro -km agent      # hold scroll wheel to enter bo
 > `export PATH="$(brew --prefix avr-gcc@8)/bin:$(brew --prefix avr-binutils)/bin:$PATH"`
 
 atmega32u4 / atmel-dfu — recoverable, low brick risk. If the VIA keymap resets,
-re-apply the 4 layers with `./run.sh layers.py --apply`.
+re-apply the 4 layers with `./run.sh tools/layers.py --apply`.
 
 ## What it does
 

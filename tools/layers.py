@@ -24,8 +24,8 @@ Physical grid (matrix positions):
            [2,0]  [2,1][2,2]  [2,3]
     HOME   [3,0]  [3,1][3,2]  [3,3]   NEXT
 
-  ./run.sh layers.py --apply
-  ./run.sh layers.py --preview     # print without writing
+  ./run.sh tools/layers.py --apply
+  ./run.sh tools/layers.py --preview     # print without writing
 """
 import sys
 

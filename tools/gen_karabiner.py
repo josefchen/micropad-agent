@@ -5,7 +5,7 @@ The pad sends nothing but meaningless signals; every real shortcut is decided he
 by whichever app happens to be frontmost. Edit MAPPINGS and re-run — hand-editing
 60+ Karabiner manipulators is how mistakes get in.
 
-  ./run.sh gen_karabiner.py > ~/Projects/input-setup/creator-micro-routing.json
+  ./run.sh tools/gen_karabiner.py > ~/Projects/input-setup/creator-micro-routing.json
 """
 import json
 

@@ -6,7 +6,7 @@ Answers three questions:
   2. Does the firmware answer the VIA protocol handshake?
   3. Which lighting channel (rgb_matrix / rgblight) actually responds?
 
-Run:  ./run.sh probe.py
+Run:  ./run.sh tools/probe.py
 """
 import sys
 import time

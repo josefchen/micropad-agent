@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Slow, obvious colour test for the Micro Pad. Watch the pad.
 
-Run:  ./run.sh colortest.py
+Run:  ./run.sh tools/colortest.py
 """
 import sys
 import time

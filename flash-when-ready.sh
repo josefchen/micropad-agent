@@ -14,7 +14,7 @@ echo "=== $(date) flash ==="
 # The daemon holds the pad's HID interface exclusively; pause it for the backup.
 launchctl bootout "$LABEL" 2>/dev/null || true
 sleep 1
-FRESH=$(cd "$REPO" && ./run.sh via_keymap.py --backup 2>/dev/null | sed -n 's/.*-> //p' || true)
+FRESH=$(cd "$REPO" && ./run.sh tools/via_keymap.py --backup 2>/dev/null | sed -n 's/.*-> //p' || true)
 launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/dev.micropad.agent.plist" 2>/dev/null \
   || launchctl kickstart -k "$LABEL"
 for _ in $(seq 1 30); do
@@ -60,7 +60,7 @@ done
 sleep 1
 
 if [ -f "$BACKUP" ]; then
-  (cd "$REPO" && ./run.sh via_keymap.py --restore "$BACKUP") || echo "keymap restore failed"
+  (cd "$REPO" && ./run.sh tools/via_keymap.py --restore "$BACKUP") || echo "keymap restore failed"
 fi
 
 launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/dev.micropad.agent.plist" 2>/dev/null \

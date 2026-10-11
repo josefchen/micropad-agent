@@ -88,8 +88,8 @@ State codes:
 logical-slot → LED-index mapping; the firmware just paints LED `i` with `s[i]`.
 
 We keep VIA: `via_custom_value_command_kb` intercepts only channel `0x30` and
-returns `false` for everything else, so the VIA app, `layers.py`, and
-`via_keymap.py` keep working unchanged. Keys, layers, and shortcuts are untouched
+returns `false` for everything else, so the VIA app, `tools/layers.py`, and
+`tools/via_keymap.py` keep working unchanged. Keys, layers, and shortcuts are untouched
 — this only adds an LED overlay.
 
 ---
@@ -151,7 +151,7 @@ render: the ten slots glow dim-white as a status strip; each active session
 ```
 
 The bottom row [3,1]/[3,2] wear opaque green/red caps and are fixed accept (`y`)
-/ reject (`esc`) on every layer (see `layers.py`) — not status slots.
+/ reject (`esc`) on every layer (see `tools/layers.py`) — not status slots.
 
 Position encodes the agent: Claude sessions land on the left keys, Codex
 on the right, so you can tell them apart by where they light up as well as
@@ -193,5 +193,5 @@ slots and cap those translucent; the rest can stay opaque per the keycap guide.
 - [x] Ship v2 via `./bootstrap.sh --per-key` (launchd runs `daemon_perkey.py`)
 - [ ] Buy translucent Choc caps for the six status keys (top two rows)
 - [ ] Fill in `focus_session.sh` / `spawn_session.sh` for your terminal
-- [ ] Re-apply the 4-layer keymap (`layers.py --apply`) if VIA keymap resets
+- [ ] Re-apply the 4-layer keymap (`tools/layers.py --apply`) if VIA keymap resets
 ```

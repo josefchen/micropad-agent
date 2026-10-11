@@ -14,7 +14,7 @@
 #include "raw_hid.h"
 #include "via.h"
 
-/* Flash-time default keymap. The live keymap is applied at runtime by layers.py
+/* Flash-time default keymap. The live keymap is applied at runtime by tools/layers.py
  * over VIA, so these are just sane defaults (4 layers, bottom-left = home,
  * bottom-right = next). [0,3] has no key (knob). */
 const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {

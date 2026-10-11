@@ -5,7 +5,7 @@ Red and amber wash out into each other through the pad's diffusers, so the error
 state needs a signal that doesn't rely on hue distance alone. Each candidate is
 shown right after 3s of solid amber so the contrast is judged directly.
 
-Run with the daemon stopped:  pkill -f daemon.py && ./run.sh errortest.py
+Run with the daemon stopped:  pkill -f daemon.py && ./run.sh tools/errortest.py
 """
 import sys
 import time

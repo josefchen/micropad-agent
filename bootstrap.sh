@@ -42,6 +42,8 @@ done
 if [ -n "$UNINSTALL" ]; then
   launchctl unload "$PLIST" 2>/dev/null || true   # NB: pkill won't kill it (KeepAlive)
   rm -f "$PLIST" && log "daemon removed"
+  launchctl bootout "gui/$(id -u)/dev.micropad.menubar" 2>/dev/null || true
+  rm -rf "$HOME/Library/LaunchAgents/dev.micropad.menubar.plist" "$HOME/Applications/Micropad.app"
   [ -x "$HERE/run.sh" ] && "$HERE/run.sh" install_hooks.py --uninstall || true
   warn "Codex notify in $CODEX_CFG left untouched — remove the notify line by hand if you want."
   log "done."
@@ -125,7 +127,18 @@ else
   printf '\nnotify = ["%s"]\n' "$NOTIFY_SH" >> "$CODEX_CFG"
   log "codex notify wired"
 fi
-warn "reminder: Codex lights up only from the CLI. The ChatGPT app can't fire notify."
+if [ "$DAEMON" = daemon.py ]; then
+  warn "reminder: in stock mode Codex lights up only from the CLI. The ChatGPT app can't fire notify."
+fi
+
+# ---- 5b. menu bar app (per-key mode) ----------------------------------------
+if [ "$DAEMON" = daemon_perkey.py ]; then
+  if command -v swiftc >/dev/null; then
+    log "building the menu bar app…"; "$HERE/mac/build.sh"
+  else
+    warn "swiftc not found: install Xcode or the Command Line Tools, then run mac/build.sh for the menu bar app"
+  fi
+fi
 
 # ---- 6. health check -------------------------------------------------------
 for _ in 1 2 3; do

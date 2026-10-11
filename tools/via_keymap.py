@@ -4,10 +4,10 @@
 usevia.app does this by hand; this does the same thing over the same raw-HID
 protocol, but from a table we can review and re-run.
 
-  ./run.sh via_keymap.py --backup            # dump current keymap to JSON
-  ./run.sh via_keymap.py --show              # print current layer 0
-  ./run.sh via_keymap.py --apply             # write our signal map
-  ./run.sh via_keymap.py --restore FILE      # put a backup back
+  ./run.sh tools/via_keymap.py --backup            # dump current keymap to JSON
+  ./run.sh tools/via_keymap.py --show              # print current layer 0
+  ./run.sh tools/via_keymap.py --apply             # write our signal map
+  ./run.sh tools/via_keymap.py --restore FILE      # put a backup back
 
 Stop the LED daemon first — two processes interleaving 32-byte reports on the
 same interface will scramble each other's replies:
@@ -157,7 +157,7 @@ def main():
     if "--backup" in args:
         layers = via.layer_count()
         snap = dump(via, layers)
-        out = Path(__file__).parent / f"keymap-backup-{int(time.time())}.json"
+        out = Path(__file__).resolve().parent.parent / f"keymap-backup-{int(time.time())}.json"
         out.write_text(json.dumps(snap, indent=2))
         print(f"✅ {layers} layers backed up -> {out}")
         return 0

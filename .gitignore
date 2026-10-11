@@ -11,8 +11,5 @@ __pycache__/
 # macOS cruft
 .DS_Store
 
-# Built extension package; rebuild from cursor-extension/
-*.vsix
-
 # Pre-flash VIA keymap snapshots (flash-when-ready.sh): personal, regenerated each flash
 keymap-backup-*.json
