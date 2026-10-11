@@ -11,6 +11,12 @@ host-side over raw HID.
 > Built so other Figma × Work Louder owners can **reuse the pad they already
 > have** instead of buying the dedicated Micro Codex.
 
+Forked from [kimtoma/micropad-agent](https://github.com/kimtoma/micropad-agent).
+This fork adds one key per live session for Claude.app, Codex and Cursor (read
+from each app's own files, including remote Claude sessions), hold-a-key to
+open a session, the scroll wheel as a session switcher, per-session token
+counts, and a native macOS menu bar app (`mac/`).
+
 ## What you see
 
 Colour encodes **state** (Codex-Micro style); only the working states keep the
@@ -48,7 +54,7 @@ never depends on firmware effect ids.
 ## Install
 
 ```bash
-git clone https://github.com/kimtoma/micropad-agent.git
+git clone https://github.com/josefchen/micropad-agent.git
 cd micropad-agent
 ./bootstrap.sh
 ```
@@ -198,7 +204,7 @@ usage page/usage `0xFF60`/`0x61`, VIA 프로토콜 v12, 16키(4×4) + 노브 2 +
 ### 설치
 
 ```bash
-git clone https://github.com/kimtoma/micropad-agent.git
+git clone https://github.com/josefchen/micropad-agent.git
 cd micropad-agent
 ./bootstrap.sh
 ```

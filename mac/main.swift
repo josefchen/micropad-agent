@@ -211,29 +211,74 @@ final class Shape: NSView {
     }
 }
 
-enum HUDLayout {
-    static let card = NSSize(width: 210, height: 236)
-    static let gap: CGFloat = 14
-    static let pad: CGFloat = 20
-    static let header: CGFloat = 26
-    static let footer: CGFloat = 30
-    static let step = card.width + gap
+/// The pad seen from above: LED index per key, plus the two encoders.
+enum PadCell { case key(Int), wheel, knob, blank }
 
-    static func maxCards(for screenWidth: CGFloat) -> Int {
-        max(1, Int((screenWidth - 80 - pad * 2 + gap) / step))
-    }
+let padLayout: [[PadCell]] = [
+    [.wheel, .key(10), .key(11), .knob],
+    [.key(9), .key(8), .key(7), .key(6)],
+    [.key(2), .key(3), .key(4), .key(5)],
+    [.blank, .key(1), .key(0), .blank],
+]
+
+enum HUD {
+    static let pad: CGFloat = 22
+    static let header: CGFloat = 24
+    static let footer: CGFloat = 34
+    static let tile = NSSize(width: 158, height: 150)
+    static let gap: CGFloat = 10
+    static let recentWidth: CGFloat = 260
+    static let recentRow: CGFloat = 58
 }
 
-func label(_ text: String, size: CGFloat, weight: NSFont.Weight, colour: NSColor, lines: Int = 1) -> NSTextField {
+func label(_ text: String, size: CGFloat, weight: NSFont.Weight, colour: NSColor, lines: Int = 1,
+           align: NSTextAlignment = .center) -> NSTextField {
     let f = lines > 1 ? NSTextField(wrappingLabelWithString: text) : NSTextField(labelWithString: text)
     f.font = .systemFont(ofSize: size, weight: weight)
     f.textColor = colour
-    f.alignment = .center
+    f.alignment = align
     f.maximumNumberOfLines = lines
     f.lineBreakMode = lines > 1 ? .byWordWrapping : .byTruncatingTail
     f.cell?.truncatesLastVisibleLine = true
     return f
 }
+
+private func add(_ parent: NSView, _ child: NSView, _ frame: NSRect) {
+    child.frame = frame
+    parent.addSubview(child)
+}
+
+private func shape(fill: NSColor, stroke: NSColor = .clear, width: CGFloat = 0, radius: CGFloat) -> Shape {
+    let s = Shape()
+    s.fill = fill
+    s.stroke = stroke
+    s.lineWidth = width
+    s.radius = radius
+    return s
+}
+
+private func panelRoot(_ size: NSSize, glass: Bool) -> Shape {
+    let root = shape(fill: NSColor(white: 0.06, alpha: glass ? 0.55 : 0.96),
+                     stroke: NSColor(white: 1, alpha: 0.10), width: 1, radius: 26)
+    root.frame = NSRect(origin: .zero, size: size)
+    root.appearance = NSAppearance(named: .darkAqua)
+    return root
+}
+
+final class IconView: NSView {
+    var image: NSImage?
+    override func draw(_ dirtyRect: NSRect) {
+        image?.draw(in: bounds, from: .zero, operation: .sourceOver, fraction: 1)
+    }
+}
+
+private func icon(_ s: Session) -> NSView {
+    let v = IconView()
+    v.image = s.appIcon
+    return v
+}
+
+private let dim = NSColor(white: 1, alpha: 0.4)
 
 /// A key being held: how far through the hold it already is, and how long remains.
 struct Hold {
@@ -241,101 +286,158 @@ struct Hold {
     let remaining: TimeInterval
 }
 
-/// The wheel's order: live sessions (on the pad) then recent ones. Shows a
-/// window of at most `maxCards` that keeps the selection in view.
-func switcherView(_ order: [Session], liveCount: Int, selected: String?, maxCards: Int, glass: Bool,
-                  hold: Hold? = nil) -> NSView {
-    let sel = order.firstIndex { $0.sid == selected } ?? 0
-    let start = max(0, min(sel - maxCards / 2, order.count - maxCards))
-    let shown = Array(order.enumerated()).dropFirst(start).prefix(maxCards)
-    let n = CGFloat(max(shown.count, 1))
-    let width = HUDLayout.pad * 2 + n * HUDLayout.step - HUDLayout.gap
-    let height = HUDLayout.pad * 2 + HUDLayout.header + HUDLayout.card.height + HUDLayout.footer
-    let root = Shape(frame: NSRect(x: 0, y: 0, width: width, height: height))
-    root.appearance = NSAppearance(named: .darkAqua)
-    root.fill = NSColor(white: 0.06, alpha: glass ? 0.55 : 0.96)
-    root.stroke = NSColor(white: 1, alpha: 0.10)
-    root.lineWidth = 1
-    root.radius = 26
+// MARK: wheel view: sessions on their keys, in the pad's shape, recent ones alongside
 
-    let action = hold == nil ? "Turn the wheel to choose  ·  stop to open" : "Keep holding to open  ·  let go to cancel"
-    let more = (start > 0 ? "‹ \(start) more   " : "") + action +
-        (start + shown.count < order.count ? "   \(order.count - start - shown.count) more ›" : "")
-    let hint = label(more, size: 12, weight: .medium, colour: NSColor(white: 1, alpha: 0.45))
-    hint.frame = NSRect(x: 0, y: height - HUDLayout.pad - 18, width: width, height: 18)
-    root.addSubview(hint)
+func padView(keys: [Session], recent: [Session], selected: String?, glass: Bool) -> NSView {
+    let t = HUD.tile, g = HUD.gap
+    let gridW = 4 * t.width + 3 * g, gridH = 4 * t.height + 3 * g
+    let recentW = recent.isEmpty ? 0 : 2 * g + HUD.recentWidth
+    let size = NSSize(width: HUD.pad * 2 + gridW + recentW,
+                      height: HUD.pad * 2 + HUD.header + gridH + HUD.footer)
+    let root = panelRoot(size, glass: glass)
+    let top = HUD.pad + HUD.header
 
-    for (slot, (i, s)) in shown.enumerated() {
-        let x = HUDLayout.pad + CGFloat(slot) * HUDLayout.step
-        if slot == 0 || i == liveCount {
-            let heading = label(i < liveCount ? "ON THE PAD" : "RECENT", size: 11, weight: .bold,
-                                colour: NSColor(white: 1, alpha: 0.4))
-            heading.alignment = .left
-            heading.frame = NSRect(x: x + 4, y: HUDLayout.pad, width: HUDLayout.card.width, height: 16)
-            root.addSubview(heading)
+    add(root, label("ON THE PAD", size: 11, weight: .bold, colour: dim, align: .left),
+        NSRect(x: HUD.pad + 4, y: HUD.pad, width: 200, height: 16))
+    let byLed = Dictionary(keys.compactMap { s in s.led.map { ($0, s) } }, uniquingKeysWith: { a, _ in a })
+    for (r, row) in padLayout.enumerated() {
+        for (c, cell) in row.enumerated() {
+            let frame = NSRect(x: HUD.pad + CGFloat(c) * (t.width + g), y: top + CGFloat(r) * (t.height + g),
+                               width: t.width, height: t.height)
+            switch cell {
+            case .key(let led):
+                if let s = byLed[led], s.sid != nil {
+                    add(root, tile(s, selected: s.sid == selected), frame)
+                } else {
+                    add(root, shape(fill: NSColor(white: 1, alpha: 0.03), stroke: NSColor(white: 1, alpha: 0.07),
+                                    width: 1, radius: 16), frame)
+                }
+            case .wheel: add(root, encoder("Scroll to choose", active: true), frame)
+            case .knob: add(root, encoder("Volume", active: false), frame)
+            case .blank: break
+            }
         }
-        let c = card(s, selected: s.sid == selected, recent: i >= liveCount,
-                     hold: s.sid == selected ? hold : nil)
-        c.frame.origin = NSPoint(x: x, y: HUDLayout.pad + HUDLayout.header)
-        root.addSubview(c)
     }
+
+    if !recent.isEmpty {
+        let x = HUD.pad + gridW + 2 * g
+        add(root, label("RECENT", size: 11, weight: .bold, colour: dim, align: .left),
+            NSRect(x: x + 4, y: HUD.pad, width: 200, height: 16))
+        for (i, s) in recent.enumerated() {
+            add(root, recentRow(s, selected: s.sid == selected),
+                NSRect(x: x, y: top + CGFloat(i) * (HUD.recentRow + 8), width: HUD.recentWidth, height: HUD.recentRow))
+        }
+    }
+
+    add(root, label("Turn the wheel to choose  ·  stop to open", size: 12, weight: .medium, colour: dim),
+        NSRect(x: 0, y: size.height - HUD.pad - 18, width: size.width, height: 18))
     return root
 }
 
-private func card(_ s: Session, selected: Bool, recent: Bool, hold: Hold?) -> NSView {
-    let w = HUDLayout.card.width, h = HUDLayout.card.height
-    let v = Shape(frame: NSRect(origin: .zero, size: HUDLayout.card))
-    v.radius = 18
-    v.alphaValue = recent && !selected ? 0.6 : 1
-    v.fill = selected ? s.familyColour.withAlphaComponent(0.20) : NSColor(white: 1, alpha: 0.05)
-    v.stroke = s.familyColour
-    v.lineWidth = selected ? 3 : 0
-
-    let icon = NSImageView(frame: NSRect(x: (w - 52) / 2, y: 16, width: 52, height: 52))
-    icon.image = s.appIcon
-    icon.imageScaling = .scaleProportionallyUpOrDown
-    v.addSubview(icon)
-
-    let app = label(s.app.uppercased(), size: 12, weight: .bold, colour: s.familyColour)
-    app.frame = NSRect(x: 8, y: 74, width: w - 16, height: 16)
-    v.addSubview(app)
-
-    let title = label(s.displayTitle, size: 15, weight: .semibold,
-                      colour: NSColor(white: 1, alpha: selected ? 1 : 0.85), lines: 2)
-    title.frame = NSRect(x: 12, y: 96, width: w - 24, height: 42)
-    v.addSubview(title)
-
-    let burnt = label(s.tokensBurnt ?? "—", size: 17, weight: .bold,
-                      colour: NSColor(white: 1, alpha: s.tokensBurnt == nil ? 0.3 : 0.95))
-    burnt.font = .monospacedDigitSystemFont(ofSize: 17, weight: .bold)
-    burnt.frame = NSRect(x: 8, y: 144, width: w - 16, height: 22)
-    v.addSubview(burnt)
-    let detail = label(s.tokenDetail, size: 11, weight: .medium, colour: NSColor(white: 1, alpha: 0.45))
-    detail.frame = NSRect(x: 8, y: 167, width: w - 16, height: 15)
-    v.addSubview(detail)
-
-    if let hold {
-        v.addSubview(holdBar(frame: NSRect(x: 18, y: h - 12, width: w - 36, height: 4),
-                             colour: s.familyColour, hold: hold))
-    }
-
-    let state = label("● \(s.stateLabel)  ·  \(s.age)", size: 13, weight: .semibold, colour: s.stateColour)
-    state.frame = NSRect(x: 8, y: h - 34, width: w - 16, height: 18)
-    v.addSubview(state)
+private func tile(_ s: Session, selected: Bool) -> NSView {
+    let w = HUD.tile.width
+    let v = shape(fill: selected ? s.familyColour.withAlphaComponent(0.22) : NSColor(white: 1, alpha: 0.06),
+                  stroke: selected ? s.familyColour : s.familyColour.withAlphaComponent(0.35),
+                  width: selected ? 3 : 1, radius: 16)
+    v.frame.size = HUD.tile
+    add(v, icon(s), NSRect(x: (w - 30) / 2, y: 12, width: 30, height: 30))
+    add(v, label(s.app.uppercased(), size: 11, weight: .bold, colour: s.familyColour), NSRect(x: 6, y: 45, width: w - 12, height: 14))
+    add(v, label(s.displayTitle, size: 13, weight: .semibold, colour: .white, lines: 2), NSRect(x: 8, y: 61, width: w - 16, height: 34))
+    let tokens = label(s.tokensBurnt ?? "—", size: 14, weight: .bold, colour: NSColor(white: 1, alpha: s.tokensBurnt == nil ? 0.3 : 0.92))
+    tokens.font = .monospacedDigitSystemFont(ofSize: 14, weight: .bold)
+    add(v, tokens, NSRect(x: 6, y: 100, width: w - 12, height: 18))
+    add(v, label("● \(s.stateLabel) · \(s.age)", size: 11, weight: .semibold, colour: s.stateColour),
+        NSRect(x: 6, y: 124, width: w - 12, height: 15))
     return v
 }
 
+private func encoder(_ caption: String, active: Bool) -> NSView {
+    let v = NSView(frame: NSRect(origin: .zero, size: HUD.tile))
+    let d: CGFloat = 92
+    add(v, shape(fill: NSColor(white: 1, alpha: active ? 0.10 : 0.04),
+                 stroke: NSColor(white: 1, alpha: active ? 0.45 : 0.10), width: active ? 2 : 1, radius: d / 2),
+        NSRect(x: (HUD.tile.width - d) / 2, y: 14, width: d, height: d))
+    add(v, label(caption, size: 11, weight: .medium, colour: NSColor(white: 1, alpha: active ? 0.6 : 0.3)),
+        NSRect(x: 0, y: 118, width: HUD.tile.width, height: 15))
+    return v
+}
+
+private func recentRow(_ s: Session, selected: Bool) -> NSView {
+    let w = HUD.recentWidth, h = HUD.recentRow
+    let v = shape(fill: selected ? s.familyColour.withAlphaComponent(0.22) : NSColor(white: 1, alpha: 0.04),
+                  stroke: s.familyColour, width: selected ? 3 : 0, radius: 14)
+    v.frame.size = NSSize(width: w, height: h)
+    v.alphaValue = selected ? 1 : 0.7
+    add(v, icon(s), NSRect(x: 12, y: (h - 30) / 2, width: 30, height: 30))
+    add(v, label(s.displayTitle, size: 13, weight: .semibold, colour: .white, align: .left),
+        NSRect(x: 52, y: 11, width: w - 64, height: 17))
+    let meta = "\(s.tokensBurnt ?? s.app)  ·  \(s.stateLabel) · \(s.age)"
+    add(v, label(meta, size: 11, weight: .medium, colour: NSColor(white: 1, alpha: 0.55), align: .left),
+        NSRect(x: 52, y: 31, width: w - 64, height: 15))
+    return v
+}
+
+// MARK: hold view: just the held key's session, and where that key is on the pad
+
+func holdView(_ s: Session, hold: Hold?, glass: Bool) -> NSView {
+    let cell: CGFloat = 26, cg: CGFloat = 5
+    let map = 4 * cell + 3 * cg
+    let card = NSSize(width: 320, height: 224)
+    let size = NSSize(width: HUD.pad * 2 + map + 28 + card.width, height: HUD.pad * 2 + card.height + HUD.footer)
+    let root = panelRoot(size, glass: glass)
+
+    let mapTop = HUD.pad + (card.height - map) / 2
+    for (r, row) in padLayout.enumerated() {
+        for (c, k) in row.enumerated() {
+            let f = NSRect(x: HUD.pad + CGFloat(c) * (cell + cg), y: mapTop + CGFloat(r) * (cell + cg), width: cell, height: cell)
+            switch k {
+            case .key(let led):
+                let mine = led == s.led
+                add(root, shape(fill: mine ? s.familyColour : NSColor(white: 1, alpha: 0.08), radius: 6), f)
+            case .wheel, .knob:
+                add(root, shape(fill: .clear, stroke: NSColor(white: 1, alpha: 0.15), width: 1.5, radius: cell / 2), f)
+            case .blank: break
+            }
+        }
+    }
+
+    let cx = HUD.pad + map + 28, w = card.width
+    let v = shape(fill: s.familyColour.withAlphaComponent(0.16), stroke: s.familyColour, width: 2, radius: 20)
+    add(root, v, NSRect(origin: NSPoint(x: cx, y: HUD.pad), size: card))
+    add(v, icon(s), NSRect(x: 20, y: 20, width: 48, height: 48))
+    add(v, label(s.app.uppercased(), size: 12, weight: .bold, colour: s.familyColour, align: .left),
+        NSRect(x: 80, y: 24, width: w - 100, height: 16))
+    add(v, label("● \(s.stateLabel) · \(s.age)", size: 13, weight: .semibold, colour: s.stateColour, align: .left),
+        NSRect(x: 80, y: 45, width: w - 100, height: 17))
+    add(v, label(s.displayTitle, size: 18, weight: .semibold, colour: .white, lines: 2, align: .left),
+        NSRect(x: 20, y: 82, width: w - 40, height: 48))
+    let tokens = label(s.tokensBurnt ?? "—", size: 22, weight: .bold,
+                       colour: NSColor(white: 1, alpha: s.tokensBurnt == nil ? 0.3 : 0.95), align: .left)
+    tokens.font = .monospacedDigitSystemFont(ofSize: 22, weight: .bold)
+    add(v, tokens, NSRect(x: 20, y: 140, width: w - 40, height: 28))
+    add(v, label(s.tokenDetail, size: 12, weight: .medium, colour: NSColor(white: 1, alpha: 0.5), align: .left),
+        NSRect(x: 20, y: 170, width: w - 40, height: 16))
+    if let hold {
+        add(v, holdBar(size: NSSize(width: w - 40, height: 5), colour: s.familyColour, hold: hold),
+            NSRect(x: 20, y: card.height - 22, width: w - 40, height: 5))
+    }
+
+    add(root, label("Keep holding to open  ·  let go to cancel", size: 12, weight: .medium, colour: dim),
+        NSRect(x: 0, y: size.height - HUD.pad - 18, width: size.width, height: 18))
+    return root
+}
+
 /// Fills left to right over the rest of the hold; Core Animation runs it, the app does no per-frame work.
-private func holdBar(frame: NSRect, colour: NSColor, hold: Hold) -> NSView {
-    let track = NSView(frame: frame)
+private func holdBar(size: NSSize, colour: NSColor, hold: Hold) -> NSView {
+    let track = NSView(frame: NSRect(origin: .zero, size: size))
     track.wantsLayer = true
     track.layer?.backgroundColor = NSColor(white: 1, alpha: 0.12).cgColor
-    track.layer?.cornerRadius = frame.height / 2
+    track.layer?.cornerRadius = size.height / 2
     track.layer?.masksToBounds = true
     let fill = CALayer()
     fill.backgroundColor = colour.cgColor
     fill.anchorPoint = CGPoint(x: 0, y: 0.5)
-    fill.frame = CGRect(origin: .zero, size: frame.size)
+    fill.frame = CGRect(origin: .zero, size: size)
     track.layer?.addSublayer(fill)
     guard hold.remaining > 0 else {
         fill.transform = CATransform3DMakeScale(hold.done, 1, 1)
@@ -344,7 +446,7 @@ private func holdBar(frame: NSRect, colour: NSColor, hold: Hold) -> NSView {
     let grow = CABasicAnimation(keyPath: "transform.scale.x")
     grow.fromValue = hold.done
     grow.toValue = 1
-    grow.duration = max(hold.remaining, 0.01)
+    grow.duration = hold.remaining
     fill.add(grow, forKey: "hold")
     return track
 }
@@ -352,12 +454,10 @@ private func holdBar(frame: NSRect, colour: NSColor, hold: Hold) -> NSView {
 final class SwitcherHUD {
     private var panel: NSPanel?
 
-    func show(_ order: [Session], liveCount: Int, selected: String, hold: Hold?) {
+    func show(_ content: NSView) {
         let panel = self.panel ?? makePanel()
         let screen = NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main
         let area = screen?.visibleFrame ?? .zero
-        let content = switcherView(order, liveCount: liveCount, selected: selected,
-                                   maxCards: HUDLayout.maxCards(for: area.width), glass: true, hold: hold)
         let size = content.frame.size
         panel.contentView = glass(around: content)
         panel.setFrame(NSRect(x: area.midX - size.width / 2, y: area.midY - size.height / 2,
@@ -409,8 +509,8 @@ final class SwitcherHUD {
     }
 }
 
-/// `Micropad --render out.png [--hold 0.6] [sid-prefix]`: draw the switcher from live
-/// daemon state to a PNG, optionally frozen part-way through a key hold.
+/// `Micropad --render out.png [--hold 0.6] [sid-prefix]`: draw the switcher (or, with
+/// --hold, the held-key view frozen part-way) from live daemon state to a PNG.
 func renderPreview(to path: String) -> Int32 {
     guard let data = try? Data(contentsOf: daemon.appendingPathComponent("state")),
           let snap = try? decodeSnapshot(data) else {
@@ -418,13 +518,15 @@ func renderPreview(to path: String) -> Int32 {
         return 1
     }
     let live = snap.keys.filter { $0.sid != nil }
-    let order = live + snap.others.prefix(6)
-    let selected = CommandLine.arguments.last.flatMap { a in order.first { $0.sid?.hasPrefix(a) == true } }
-    let frozen = CommandLine.arguments.firstIndex(of: "--hold").map { i in
-        Hold(done: Double(CommandLine.arguments[i + 1]) ?? 0.5, remaining: 0)
+    let recent = Array(snap.others.prefix(6))
+    let args = CommandLine.arguments
+    let picked = args.last.flatMap { a in (live + recent).first { $0.sid?.hasPrefix(a) == true } }
+    let view: NSView
+    if let i = args.firstIndex(of: "--hold"), let s = picked ?? live.first {
+        view = holdView(s, hold: Hold(done: Double(args[i + 1]) ?? 0.5, remaining: 0), glass: false)
+    } else {
+        view = padView(keys: live, recent: recent, selected: (picked ?? live.first)?.sid, glass: false)
     }
-    let view = switcherView(order, liveCount: live.count, selected: (selected ?? order.first)?.sid,
-                            maxCards: HUDLayout.maxCards(for: 1920), glass: false, hold: frozen)
     guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return 1 }
     view.cacheDisplay(in: view.bounds, to: rep)
     guard let png = rep.representation(using: .png, properties: [:]),
@@ -479,11 +581,16 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
             blinkOn = true
         }
         render()
-        if let s, let sel = s.switcher?.sid {
+        let held = hold(for: s?.switcher)
+        if let s, let sw = s.switcher, let sel = sw.sid {
             let all = Dictionary((s.keys + s.others).compactMap { r in r.sid.map { ($0, r) } },
                                  uniquingKeysWith: { a, _ in a })
-            let order = (s.switcher?.order ?? []).compactMap { all[$0] }
-            hud.show(order, liveCount: order.prefix { $0.led != nil }.count, selected: sel, hold: hold(for: s.switcher))
+            if sw.mode == "hold", let session = all[sel] {
+                hud.show(holdView(session, hold: held, glass: true))
+            } else {
+                let recent = (sw.order ?? []).compactMap { all[$0] }.filter { $0.led == nil }
+                hud.show(padView(keys: live, recent: recent, selected: sel, glass: true))
+            }
         } else {
             holdStart = nil
             hud.hide()

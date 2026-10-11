@@ -4,7 +4,7 @@
 # pad); otherwise waits for a manual bootloader entry (hold the top-left wheel
 # while plugging in). Then restores the VIA keymap and restarts the daemon.
 set -euo pipefail
-REPO="/Users/josefchen/Projects/micropad-agent"
+REPO="$(cd "$(dirname "$0")" && pwd)"
 HEX="$REPO/firmware/work_louder_micro/agent/work_louder_micro_agent.hex"
 LABEL="gui/$(id -u)/dev.micropad.agent"
 LOG=/tmp/micropad-flash.log
