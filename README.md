@@ -43,8 +43,7 @@ Press a lit key and its session appears on screen. Keep holding for a second and
 the window opens: Claude, Codex, or Cursor's Agents window. Let go to cancel.
 
 <p align="center">
-  <img src="docs/media/hold-to-open.gif" width="49%" alt="Hold-to-open panel filling its progress bar">
-  <img src="docs/media/hold-photo.jpg" width="49%" alt="Pressing a key brings up the session on screen">
+  <img src="docs/media/hold-to-open.gif" width="600" alt="Hold-to-open panel filling its progress bar">
 </p>
 
 ### Scroll to switch.
@@ -53,8 +52,16 @@ The wheel walks through your sessions laid out in the shape of the pad, then
 through your most recent ones. Stop turning and the selected session opens.
 
 <p align="center">
-  <img src="docs/media/wheel-switcher.gif" width="49%" alt="Wheel switcher moving across sessions laid out like the pad">
-  <img src="docs/media/in-use.jpg" width="49%" alt="Using the pad next to the on-screen panel">
+  <img src="docs/media/wheel-switcher.gif" width="460" alt="Wheel switcher moving across sessions laid out like the pad">
+</p>
+
+### On your desk.
+
+The panel appears wherever you're working and gets out of the way when you let go.
+
+<p align="center">
+  <img src="docs/media/hold-photo.jpg" width="49%" alt="Pressing a key brings up its session on screen">
+  <img src="docs/media/in-use.jpg" width="49%" alt="Holding a key while the panel fills">
 </p>
 
 ### Tokens, at a glance.
