@@ -111,6 +111,19 @@ protocol in [docs/per-key-led-design.md](docs/per-key-led-design.md); flashing
 details in
 [firmware/work_louder_micro/agent/readme.md](firmware/work_louder_micro/agent/readme.md).
 
+With Tier B the top-left wheel becomes a **session switcher** while the daemon is
+running: each notch moves a white highlight through the lit keys, and resting the
+wheel for ~0.9 s opens the highlighted session. With no daemon it is a mouse wheel
+again.
+
+### Menu bar app
+
+`mac/build.sh` builds `~/Applications/Micropad.app` (one AppKit file, ~14 MB
+resident) and installs it as the `dev.micropad.menubar` LaunchAgent. It shows a
+dot per live session in the menu bar (◆ blinking = needs you, ● working,
+○ done), a menu to open any session, and a Cmd-Tab-style panel while you turn the
+wheel. It listens to the daemon's `GET /events` stream rather than polling.
+
 ## Optional: keymap & app routing
 
 `via_keymap.py` and `layers.py` can rewrite the pad's keymap over the same VIA

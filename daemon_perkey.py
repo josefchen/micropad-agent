@@ -41,6 +41,9 @@ RAW_USAGE_PAGE, RAW_USAGE = 0xFF60, 0x61
 ID_CUSTOM_SET_VALUE = 0x07
 CH_AGENT, VAL_FRAME, VAL_BOOTLOADER = 0x30, 0x01, 0x02
 MSG_FOCUS = 0xF1
+MSG_SCROLL = 0xF2
+SEL_BIT = 0x40           # marks the wheel-selected key in a frame (keymap.c SEL_BIT)
+SWITCH_DWELL_S = 0.9     # stop turning the wheel this long and the selection opens
 DOUBLE_TAP_S = 0.4
 
 NLED = 12
@@ -111,6 +114,13 @@ _last_state = {}
 _notified = {}  # sid -> (state, record ts) last announced; one alert per finished turn
 _seeded = False
 _pad_ok = False
+_changed = threading.Condition()   # wakes /events streams
+_switch = {"led": None, "until": 0.0}
+
+
+def _poke():
+    with _changed:
+        _changed.notify_all()
 
 
 def _load():
@@ -198,6 +208,7 @@ def refresh():
             _save()
         except OSError:
             pass
+    _poke()
     for s in changes:
         notify(s)
 
@@ -280,7 +291,40 @@ def frame():
             s = _view.get(sid)
             if s:
                 f[led] = code_for(s.family, s.state)
+        sel = _switch["led"]
+        if sel is not None and f[sel] != OFF:
+            f[sel] |= SEL_BIT
     return f
+
+
+# --- wheel switcher --------------------------------------------------------
+# Turning the wheel walks a selection through the lit keys (pad + Mac HUD show
+# it); when the wheel rests for SWITCH_DWELL_S the selected session opens.
+
+def handle_scroll(step):
+    now = time.monotonic()
+    with _lock:
+        used = set(_slots.values())
+        live = [led for led in LED_ORDER if led in used]
+        if not live:
+            return
+        cur = _switch["led"]
+        if cur in live and now < _switch["until"]:
+            i = (live.index(cur) + step) % len(live)
+        else:
+            i = 0 if step > 0 else len(live) - 1
+        _switch["led"], _switch["until"] = live[i], now + SWITCH_DWELL_S
+    _poke()
+
+
+def switcher_tick():
+    with _lock:
+        led = _switch["led"]
+        if led is None or time.monotonic() < _switch["until"]:
+            return
+        _switch["led"] = None
+    _poke()
+    threading.Thread(target=handle_focus, args=(led,), daemon=True).start()
 
 
 # --- opening sessions ------------------------------------------------------
@@ -381,13 +425,23 @@ def snapshot():
             sid = by_led.get(led)
             s = _view.get(sid) if sid else None
             keys.append({"led": led, **({"sid": s.sid, "family": s.family, "state": s.state,
-                                          "age": int(now - s.ts), "title": s.title,
+                                          "age": int(now - s.ts), "ts": s.ts, "title": s.title,
                                           "workspace": s.workspace} if s else {})})
         recent = sorted(_view.values(), key=lambda s: -s.ts)
         others = [{"sid": s.sid, "family": s.family, "state": s.state, "age": int(now - s.ts),
-                   "title": s.title, "workspace": s.workspace}
+                   "ts": s.ts, "title": s.title, "workspace": s.workspace}
                   for s in recent if s.sid not in _slots][:20]
-    return {"pad": _pad_ok, "keys": keys, "others": others, "warnings": sources.health()["warnings"]}
+        switcher = {"led": _switch["led"]}
+    return {"pad": _pad_ok, "keys": keys, "others": others, "switcher": switcher,
+            "warnings": sources.health()["warnings"]}
+
+
+def stream_snapshot():
+    """snapshot() without the ever-ticking ages, so /events only fires on real change."""
+    snap = snapshot()
+    for row in snap["keys"] + snap["others"]:
+        row.pop("age", None)
+    return json.dumps(snap, sort_keys=True)
 
 
 # --- device ----------------------------------------------------------------
@@ -472,7 +526,7 @@ class Handler(BaseHTTPRequestHandler):
             body = self._body()
         except ValueError:
             self.send_response(400); self.end_headers(); return
-        if self.path in ("/open", "/bootloader") and self.headers.get("X-Micropad") != "1":
+        if self.path in ("/open", "/bootloader", "/scroll") and self.headers.get("X-Micropad") != "1":
             self.send_response(403); self.end_headers(); return
         if self.path == "/state":
             source = body.get("source", "claude-code")
@@ -486,6 +540,9 @@ class Handler(BaseHTTPRequestHandler):
                 with _lock:
                     sid = next((k for k, v in _slots.items() if v == int(body["led"])), None)
             self._json(200 if sid and open_session(sid) else 404, {}); return
+        if self.path == "/scroll":
+            handle_scroll(1 if int(body.get("step", 1)) > 0 else -1)
+            self._json(200, {"switcher": snapshot()["switcher"]}); return
         if self.path == "/bootloader":
             self._json(200 if PAD.send(VAL_BOOTLOADER) else 503, {}); return
         self.send_response(404); self.end_headers()
@@ -495,6 +552,8 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, {"ok": True, "pad": _pad_ok}); return
         if self.path == "/state":
             self._json(200, snapshot()); return
+        if self.path == "/events":
+            self._events(); return
         if self.path in ("/", "/index.html"):
             try:
                 with open(DASHBOARD, "rb") as f:
@@ -508,6 +567,26 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(payload); return
         self.send_response(404); self.end_headers()
 
+    def _events(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+        last = None
+        try:
+            while True:
+                payload = stream_snapshot()
+                if payload != last:
+                    self.wfile.write(b"data: " + payload.encode() + b"\n\n")
+                    last = payload
+                else:
+                    self.wfile.write(b": ping\n\n")
+                self.wfile.flush()
+                with _changed:
+                    _changed.wait(15)
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            return
+
     def log_message(self, *a):
         pass
 
@@ -515,6 +594,7 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     _load()
     srv = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
+    srv.daemon_threads = True
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     threading.Thread(target=scan_loop, daemon=True).start()
     print(f"micropad-agent on http://127.0.0.1:{PORT}/", flush=True)
@@ -528,10 +608,13 @@ def main():
             if now - last_beat > HEARTBEAT_S:
                 PAD._last = None
                 last_beat = now
+            switcher_tick()
             PAD.show(frame())
-            ev = PAD.read(120)
+            ev = PAD.read(60)
             if ev and len(ev) >= 2 and ev[0] == MSG_FOCUS:
                 threading.Thread(target=handle_focus, args=(ev[1],), daemon=True).start()
+            elif ev and len(ev) >= 2 and ev[0] == MSG_SCROLL:
+                handle_scroll(1 if ev[1] == 1 else -1)
         except Exception as exc:
             print(f"render loop error: {exc}", flush=True)
             PAD._drop()

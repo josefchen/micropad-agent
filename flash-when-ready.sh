@@ -38,7 +38,10 @@ echo "DFU present, flashing"
 launchctl bootout "$LABEL" 2>/dev/null || true
 dfu-programmer atmega32u4 erase --force
 dfu-programmer atmega32u4 flash --force "$HEX"
-dfu-programmer atmega32u4 reset || true
+# reset can hang after the pad has already rebooted into the new firmware
+dfu-programmer atmega32u4 reset & RESET_PID=$!
+( sleep 5; kill "$RESET_PID" 2>/dev/null ) &
+wait "$RESET_PID" 2>/dev/null || true
 
 echo "waiting for Micro Pad to come back"
 for _ in $(seq 1 40); do

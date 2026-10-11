@@ -66,11 +66,24 @@ enum agent_state {
     ST_OFF = 0xFF,
 };
 
+/* Bit 6 of a state byte marks the key the scroll wheel has selected. */
+#define SEL_BIT 0x40
+
+static uint8_t base_state(uint8_t s) {
+    return s == ST_OFF ? s : (uint8_t)(s & ~SEL_BIT);
+}
+
+static bool is_selected(uint8_t s) {
+    return s != ST_OFF && (s & SEL_BIT);
+}
+
 static bool state_needs_input(uint8_t s) {
+    s = base_state(s);
     return s == ST_NEEDS || s == ST_NEEDS_CLAUDE || s == ST_NEEDS_CODEX || s == ST_NEEDS_CURSOR;
 }
 
 static bool state_done(uint8_t s) {
+    s = base_state(s);
     return s == ST_DONE || s == ST_DONE_CLAUDE || s == ST_DONE_CODEX || s == ST_DONE_CURSOR;
 }
 
@@ -79,6 +92,7 @@ static uint32_t last_rx;       // timer of last host frame
 
 #define VAL_BOOTLOADER 0x02    // host -> pad: reboot into DFU for a hands-free reflash
 #define MSG_FOCUS      0xF1    // pad -> host: a lit session key was pressed
+#define MSG_SCROLL     0xF2    // pad -> host: wheel turned, +1 / -1
 
 static int8_t key_led_index(uint8_t r, uint8_t c) {
     static const int8_t map[4][4] = {
@@ -96,7 +110,7 @@ static bool host_alive(void) {
 }
 
 static bool key_has_session(int8_t led) {
-    return led >= 0 && host_alive() && st[led] != ST_OFF && st[led] != ST_IDLE;
+    return led >= 0 && host_alive() && st[led] != ST_OFF && base_state(st[led]) != ST_IDLE;
 }
 
 static void send_focus(uint8_t led) {
@@ -232,7 +246,7 @@ void housekeeping_task_user(void) {
                 flashing &= ~bit;
             }
             prev_st[i] = st[i];
-            if (st[i] == ST_ERROR) err = true;
+            if (base_state(st[i]) == ST_ERROR) err = true;
             else if (state_needs_input(st[i])) needs = true;
             else if (state_done(st[i])) done++;
         }
@@ -279,7 +293,8 @@ bool rgb_matrix_indicators_advanced_user(uint8_t led_min, uint8_t led_max) {
     const bool    stale   = timer_elapsed32(last_rx) > STALE_MS;
 
     for (uint8_t i = led_min; i < led_max && i < NLED; i++) {
-        uint8_t s = stale ? ST_IDLE : st[i];
+        uint8_t s = stale ? ST_IDLE : base_state(st[i]);
+        const bool sel_white = !stale && is_selected(st[i]) && ((t / 150) & 1);
         const uint8_t done_v = done_flashing(i) && ((t / 200) & 1) ? 0 : 150;
         HSV hsv;
         switch (s) {
@@ -299,6 +314,7 @@ bool rgb_matrix_indicators_advanced_user(uint8_t led_min, uint8_t led_max) {
             case ST_OFF:          hsv = (HSV){0, 0, 0};                      break; // off
             default:              hsv = (HSV){0, 0, 14};                     break; // idle dim white
         }
+        if (sel_white) hsv = (HSV){0, 0, 200};
         RGB rgb = hsv_to_rgb(hsv);
         rgb_matrix_set_color(i, rgb.r, rgb.g, rgb.b);
     }
@@ -329,11 +345,20 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
     return true;
 }
 
-/* Encoders: top-left scroll wheel (index 0) = mouse wheel up/down (like a real
- * mouse); the right knob (index 1) = volume. Overrides the stock kb defaults. */
+/* Encoders: top-left scroll wheel (index 0) = session switcher (mouse wheel
+ * when no host); the right knob (index 1) = volume. */
 bool encoder_update_user(uint8_t index, bool clockwise) {
     if (index == 0) {
-        tap_code(clockwise ? MS_WHLU : MS_WHLD);
+        /* With the host alive the wheel walks through live sessions; without
+         * it, it is a plain mouse wheel again. */
+        if (host_alive()) {
+            uint8_t buf[32] = {0};
+            buf[0] = MSG_SCROLL;
+            buf[1] = clockwise ? 1 : 0xFF;
+            raw_hid_send(buf, sizeof(buf));
+        } else {
+            tap_code(clockwise ? MS_WHLU : MS_WHLD);
+        }
         return false;
     }
     if (index == 1) {
