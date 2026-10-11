@@ -105,8 +105,6 @@ class Session:
     app_id: str = ""
     tokens: int = 0
     cached: int = 0
-    context_used: int = 0
-    context_limit: int = 0
 
 
 _lock = threading.Lock()
@@ -164,7 +162,7 @@ def _merge(sid):
         family = "cursor" if "cursor" in (f.family, h.family) else f.family
         return Session(sid, family, best.state, best.ts, f.title or h.title,
                        h.workspace or f.workspace, h.pane, f.app_id,
-                       f.tokens, f.cached, f.context_used, f.context_limit)
+                       f.tokens, f.cached)
     s = f or h
     return Session(**asdict(s))
 
@@ -261,8 +259,7 @@ def scan_loop():
         _scan_beat = time.monotonic()
         try:
             found = {o.sid: Session(o.sid, o.family, o.state, o.ts, o.title, o.workspace, app_id=o.app_id,
-                                    tokens=o.tokens, cached=o.cached,
-                                    context_used=o.context_used, context_limit=o.context_limit)
+                                    tokens=o.tokens, cached=o.cached)
                      for o in sources.scan()}
             with _lock:
                 _files.clear()
@@ -433,8 +430,7 @@ def handle_focus(led):
 
 def _row(s, now):
     return {"sid": s.sid, "family": s.family, "state": s.state, "age": int(now - s.ts), "ts": s.ts,
-            "title": s.title, "workspace": s.workspace, "tokens": s.tokens, "cached": s.cached,
-            "context_used": s.context_used, "context_limit": s.context_limit}
+            "title": s.title, "workspace": s.workspace, "tokens": s.tokens, "cached": s.cached}
 
 
 def snapshot():

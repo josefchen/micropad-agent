@@ -156,21 +156,19 @@ class SourcesTest(unittest.TestCase):
         sub = os.path.join(self.home, ".claude", "projects", "-proj", "tok", "subagents", "agent-x.jsonl")
         self.write_jsonl(sub, [self.reply(self.now - 6, "msg_S", 1, 2, 3)])
         o = self.by_sid()["tok"]
-        self.assertEqual((o.tokens, o.cached, o.context_used), (115 + 327 + 6, 100 + 300 + 2, 320))
+        self.assertEqual((o.tokens, o.cached), (115 + 327 + 6, 100 + 300 + 2))
 
         path = os.path.join(self.home, ".claude", "projects", "-proj", "tok.jsonl")
         with open(path, "a") as f:
             f.write(json.dumps(self.reply(self.now - 1, "msg_C", 1, 400, 2)) + "\n")
         o = self.by_sid()["tok"]
-        self.assertEqual((o.tokens, o.context_used), (115 + 327 + 6 + 403, 401))
+        self.assertEqual(o.tokens, 115 + 327 + 6 + 403)
 
     def test_codex_usage_from_newest_token_count(self):
-        def tc(total, cached, last, window):
+        def tc(total, cached):
             return {"type": "event_msg", "payload": {"type": "token_count", "info": {
-                "total_token_usage": {"total_tokens": total, "cached_input_tokens": cached},
-                "last_token_usage": {"input_tokens": last}, "model_context_window": window}}}
-        newest_first = [tc(900, 800, 120, 1000), tc(500, 400, 90, 1000)]
-        self.assertEqual(self.s._codex_usage(newest_first), (900, 800, 120, 1000))
+                "total_token_usage": {"total_tokens": total, "cached_input_tokens": cached}}}}
+        self.assertEqual(self.s._codex_usage([tc(900, 800), tc(500, 400)]), (900, 800))
 
 
 if __name__ == "__main__":

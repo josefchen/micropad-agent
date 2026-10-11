@@ -41,8 +41,6 @@ class Observation:
     app_id: str = ""         # id the owning app's deep link expects, when it differs from sid
     tokens: int = 0          # tokens processed so far (input incl. cache + output); 0 = unknown
     cached: int = 0          # how many of `tokens` were cache reads
-    context_used: int = 0    # tokens in the current context window; 0 = unknown
-    context_limit: int = 0   # that window's size; 0 = unknown
 
 
 def _iso(ts):
@@ -108,12 +106,12 @@ class _Usage:
     (transcripts reach hundreds of MB), so a long session costs nothing once read."""
 
     def __init__(self, extract):
-        self._extract = extract     # raw line -> (key, total, cached, context) or None
-        self._d = {}                # path -> [offset, {key: (total, cached)}, last context]
+        self._extract = extract     # raw line -> (key, total, cached) or None
+        self._d = {}                # path -> [offset, {key: (total, cached)}]
 
     def get(self, path):
-        """(tokens, cached tokens, current context) for the transcript at `path`."""
-        st = self._d.setdefault(path, [0, {}, 0])
+        """(tokens, cached tokens) for the transcript at `path`."""
+        st = self._d.setdefault(path, [0, {}])
         try:
             with open(path, "rb") as f:
                 f.seek(st[0])
@@ -124,11 +122,10 @@ class _Usage:
                     hit = self._extract(raw) if b'"usage"' in raw else None
                     if hit:
                         st[1][hit[0]] = (hit[1], hit[2])
-                        st[2] = hit[3]
         except OSError:
             pass
         totals = st[1].values()
-        return sum(t for t, _ in totals), sum(c for _, c in totals), st[2]
+        return sum(t for t, _ in totals), sum(c for _, c in totals)
 
 
 
@@ -164,8 +161,9 @@ def _claude_usage_record(raw):
     if not u:
         return None
     cached = u.get("cache_read_input_tokens") or 0
-    context = (u.get("input_tokens") or 0) + cached + (u.get("cache_creation_input_tokens") or 0)
-    return mid.group(1), context + (u.get("output_tokens") or 0), cached, context
+    total = (u.get("input_tokens") or 0) + cached + (u.get("cache_creation_input_tokens") or 0) + (
+        u.get("output_tokens") or 0)
+    return mid.group(1), total, cached
 
 
 _claude_usage = _Usage(_claude_usage_record)
@@ -306,9 +304,9 @@ def scan_claude(now):
     for o in out:
         path = _claude_paths.get(o.sid)
         if path:
-            o.tokens, o.cached, o.context_used = _claude_usage.get(path)
+            o.tokens, o.cached = _claude_usage.get(path)
             for sub_path in glob.glob(os.path.join(path[:-6], "subagents", "*.jsonl")):
-                tokens, cached, _ = _claude_usage.get(sub_path)
+                tokens, cached = _claude_usage.get(sub_path)
                 o.tokens += tokens
                 o.cached += cached
         sub = sub_last.get(o.sid, 0.0)
@@ -343,16 +341,14 @@ def scan_claude(now):
 # --- Codex desktop / CLI ---------------------------------------------------
 
 def _codex_usage(recs):
-    """(total, cached, context used, context window) from the newest token_count event."""
+    """(total, cached) tokens from the newest token_count event."""
     for d in recs:
         p = d.get("payload") or {}
         info = p.get("info") if p.get("type") == "token_count" else None
         if info:
             total = info.get("total_token_usage") or {}
-            last = (info.get("last_token_usage") or {}).get("input_tokens") or 0
-            return (total.get("total_tokens") or 0, total.get("cached_input_tokens") or 0,
-                    last, info.get("model_context_window") or 0)
-    return 0, 0, 0, 0
+            return total.get("total_tokens") or 0, total.get("cached_input_tokens") or 0
+    return 0, 0
 
 
 def _codex_file(path):
@@ -392,9 +388,9 @@ def scan_codex(now):
             continue
         res = _cache.get(path, st, _codex_file)
         if res:
-            tokens, cached, used, limit = res[2]
+            tokens, cached = res[2]
             out.append(Observation("codex", tid, res[0], res[1], (title or "")[:80], cwd or "",
-                                   tokens=tokens, cached=cached, context_used=used, context_limit=limit))
+                                   tokens=tokens, cached=cached))
     return out
 
 
@@ -512,33 +508,7 @@ def scan_cursor(now):
         elif sid not in files:
             continue
         out.append(Observation("cursor", sid, state, ts, h.get("name") or title, ws))
-    _cursor_context(out)
     return out
-
-
-_cursor_ctx = {}   # composer id -> (activity ts it was read at, used, limit)
-
-
-def _cursor_context(obs):
-    """Cursor keeps no token totals on disk, only how full each chat's context
-    window is. composerData values run to megabytes, so let SQLite pull the two
-    fields and only re-read a chat when its activity time moves."""
-    stale = [o for o in obs if _cursor_ctx.get(o.sid, (None,))[0] != o.ts]
-    if stale and os.path.exists(CURSOR_DB):
-        try:
-            con = sqlite3.connect(f"file:{CURSOR_DB}?mode=ro", uri=True, timeout=1)
-            try:
-                for o in stale:
-                    row = con.execute(
-                        "SELECT json_extract(value, '$.contextTokensUsed'), json_extract(value, '$.contextTokenLimit') "
-                        "FROM cursorDiskKV WHERE key = ?", (f"composerData:{o.sid}",)).fetchone()
-                    _cursor_ctx[o.sid] = (o.ts, int((row or [0])[0] or 0), int((row or [0, 0])[1] or 0))
-            finally:
-                con.close()
-        except sqlite3.Error as exc:
-            _health["cursor"]["error"] = f"composerData: {exc}"
-    for o in obs:
-        _, o.context_used, o.context_limit = _cursor_ctx.get(o.sid, (0, 0, 0))
 
 
 _health = {}

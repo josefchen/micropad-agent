@@ -122,8 +122,8 @@ again.
 resident) and installs it as the `dev.micropad.menubar` LaunchAgent. It shows a
 dot per live session in the menu bar (◆ blinking = needs you, ● working,
 ○ done), a menu to open any session, and a Cmd-Tab-style panel while you turn the
-wheel. Cards show tokens used (Claude, Codex; with the cached share) and context
-fill (Codex, Cursor; Cursor records no token totals). `Micropad --render out.png`
+wheel. Cards show tokens burnt per session (Claude incl. subagents, Codex) with
+the share served from cache; Cursor logs no token counts locally. `Micropad --render out.png`
 draws the panel from live state for a quick look. It listens to the daemon's `GET /events` stream rather than polling.
 
 ## Optional: keymap & app routing

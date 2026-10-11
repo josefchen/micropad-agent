@@ -15,8 +15,6 @@ struct Session: Decodable {
     let workspace: String?
     let tokens: Int?
     let cached: Int?
-    let contextUsed: Int?
-    let contextLimit: Int?
 }
 
 struct Switcher: Decodable {
@@ -110,17 +108,16 @@ extension Session {
         return "\(s / 3600)h"
     }
 
-    /// "7.0B tokens · 99% cached"; Cursor records no totals, so nil there.
-    var tokenLine: String? {
+    var tokensBurnt: String? {
         guard let tokens, tokens > 0 else { return nil }
-        let pct = Int((Double(cached ?? 0) / Double(tokens) * 100).rounded())
-        return pct > 0 ? "\(compact(tokens)) tokens · \(pct)% cached" : "\(compact(tokens)) tokens"
+        return "\(compact(tokens)) tokens"
     }
 
-    var contextLine: String? {
-        guard let used = contextUsed, used > 0 else { return nil }
-        guard let limit = contextLimit, limit > 0 else { return "Context \(compact(used))" }
-        return "Context \(compact(used)) of \(compact(limit)) · \(Int(Double(used) / Double(limit) * 100))%"
+    /// Cursor keeps no token counts on disk (every message logs 0 / 0).
+    var tokenDetail: String {
+        guard let tokens, tokens > 0 else { return family == "cursor" ? "Cursor doesn't log tokens" : "No tokens yet" }
+        let pct = Int((Double(cached ?? 0) / Double(tokens) * 100).rounded())
+        return pct > 0 ? "\(pct)% from cache" : "burnt"
     }
 
     var displayTitle: String {
@@ -297,11 +294,14 @@ private func card(_ s: Session, selected: Bool, recent: Bool) -> NSView {
     title.frame = NSRect(x: 12, y: 96, width: w - 24, height: 42)
     v.addSubview(title)
 
-    for (row, text) in [s.tokenLine, s.contextLine].compactMap({ $0 }).enumerated() {
-        let usage = label(text, size: 12, weight: .medium, colour: NSColor(white: 1, alpha: 0.6))
-        usage.frame = NSRect(x: 8, y: 148 + CGFloat(row) * 18, width: w - 16, height: 16)
-        v.addSubview(usage)
-    }
+    let burnt = label(s.tokensBurnt ?? "—", size: 17, weight: .bold,
+                      colour: NSColor(white: 1, alpha: s.tokensBurnt == nil ? 0.3 : 0.95))
+    burnt.font = .monospacedDigitSystemFont(ofSize: 17, weight: .bold)
+    burnt.frame = NSRect(x: 8, y: 144, width: w - 16, height: 22)
+    v.addSubview(burnt)
+    let detail = label(s.tokenDetail, size: 11, weight: .medium, colour: NSColor(white: 1, alpha: 0.45))
+    detail.frame = NSRect(x: 8, y: 167, width: w - 16, height: 15)
+    v.addSubview(detail)
 
     let state = label("● \(s.stateLabel)  ·  \(s.age)", size: 13, weight: .semibold, colour: s.stateColour)
     state.frame = NSRect(x: 8, y: h - 34, width: w - 16, height: 18)
@@ -492,7 +492,7 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         mi.representedObject = s.sid
         let line = NSMutableAttributedString(string: "● ", attributes: [.foregroundColor: s.colour])
         line.append(NSAttributedString(string: s.displayTitle, attributes: [.font: NSFont.menuFont(ofSize: 0)]))
-        let usage = s.tokenLine.map { " · " + $0.components(separatedBy: " · ")[0] } ?? ""
+        let usage = s.tokensBurnt.map { " · " + $0 } ?? ""
         line.append(NSAttributedString(string: "   \(s.app) · \(s.stateLabel) · \(s.age)\(usage)", attributes: [
             .foregroundColor: NSColor.secondaryLabelColor, .font: NSFont.menuFont(ofSize: 11),
         ]))
